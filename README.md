@@ -492,6 +492,9 @@ Cloudflare 模式下，插件不会再调用 Cloudflare API 创建路由。
 
 当前 Step 6 的完成标准不是“邮箱/密码已提交”，而是：
 
+- 开始前先等待 10 秒
+- 直接删除 `chatgpt.com / openai.com` 相关 cookies
+- 再去 CPA / SUB2API 刷新最新 OAuth 链接
 - 认证页已经真正进入登录验证码页面
 - 如遇登录超时报错或登录页长时间停滞，会由后台刷新 OAuth 后重跑整个 Step 6
 

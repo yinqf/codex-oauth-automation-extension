@@ -209,6 +209,23 @@ const PERSISTED_SETTING_DEFAULTS = {
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
 const SETTINGS_EXPORT_SCHEMA_VERSION = 1;
 const SETTINGS_EXPORT_FILENAME_PREFIX = 'multipage-settings';
+const STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS = 10000;
+const PRE_LOGIN_COOKIE_CLEAR_DOMAINS = [
+  'chatgpt.com',
+  'chat.openai.com',
+  'openai.com',
+  'auth.openai.com',
+  'auth0.openai.com',
+  'accounts.openai.com',
+];
+const PRE_LOGIN_COOKIE_CLEAR_ORIGINS = [
+  'https://chatgpt.com',
+  'https://chat.openai.com',
+  'https://auth.openai.com',
+  'https://auth0.openai.com',
+  'https://accounts.openai.com',
+  'https://openai.com',
+];
 
 const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
@@ -7431,6 +7448,125 @@ async function executeStep5(state) {
 }
 
 // ============================================================
+// Step 6 Cookie Cleanup
+// ============================================================
+
+function normalizeCookieDomainForMatch(domain) {
+  return String(domain || '').trim().replace(/^\.+/, '').toLowerCase();
+}
+
+function shouldClearPreLoginCookie(cookie) {
+  const domain = normalizeCookieDomainForMatch(cookie?.domain);
+  if (!domain) return false;
+  return PRE_LOGIN_COOKIE_CLEAR_DOMAINS.some((target) => (
+    domain === target || domain.endsWith(`.${target}`)
+  ));
+}
+
+function buildCookieRemovalUrl(cookie) {
+  const host = normalizeCookieDomainForMatch(cookie?.domain);
+  const path = String(cookie?.path || '/').startsWith('/')
+    ? String(cookie?.path || '/')
+    : `/${String(cookie?.path || '')}`;
+  return `https://${host}${path}`;
+}
+
+async function collectCookiesForPreLoginCleanup() {
+  if (!chrome.cookies?.getAll) {
+    return [];
+  }
+
+  const stores = chrome.cookies.getAllCookieStores
+    ? await chrome.cookies.getAllCookieStores()
+    : [{ id: undefined }];
+  const cookies = [];
+  const seen = new Set();
+
+  for (const store of stores) {
+    const storeId = store?.id;
+    const batch = await chrome.cookies.getAll(storeId ? { storeId } : {});
+    for (const cookie of batch || []) {
+      if (!shouldClearPreLoginCookie(cookie)) continue;
+      const key = [
+        cookie.storeId || storeId || '',
+        cookie.domain || '',
+        cookie.path || '',
+        cookie.name || '',
+        cookie.partitionKey ? JSON.stringify(cookie.partitionKey) : '',
+      ].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cookies.push(cookie);
+    }
+  }
+
+  return cookies;
+}
+
+async function removeCookieDirectly(cookie) {
+  const details = {
+    url: buildCookieRemovalUrl(cookie),
+    name: cookie.name,
+  };
+
+  if (cookie.storeId) {
+    details.storeId = cookie.storeId;
+  }
+  if (cookie.partitionKey) {
+    details.partitionKey = cookie.partitionKey;
+  }
+
+  try {
+    const result = await chrome.cookies.remove(details);
+    return Boolean(result);
+  } catch (err) {
+    console.warn(LOG_PREFIX, '[removeCookieDirectly] failed', {
+      domain: cookie?.domain,
+      name: cookie?.name,
+      message: getErrorMessage(err),
+    });
+    return false;
+  }
+}
+
+async function runPreStep6CookieCleanup() {
+  await addLog(
+    `步骤 6：开始前等待 ${Math.round(STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS / 1000)} 秒，然后直接删除 ChatGPT / OpenAI cookies...`,
+    'info'
+  );
+
+  await sleepWithStop(STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS);
+
+  if (!chrome.cookies?.getAll || !chrome.cookies?.remove) {
+    await addLog('步骤 6：当前浏览器不支持 cookies API，无法直接删除 cookies。', 'warn');
+    return;
+  }
+
+  const cookies = await collectCookiesForPreLoginCleanup();
+  let removedCount = 0;
+
+  for (const cookie of cookies) {
+    throwIfStopped();
+    if (await removeCookieDirectly(cookie)) {
+      removedCount += 1;
+    }
+  }
+
+  if (chrome.browsingData?.removeCookies) {
+    try {
+      await chrome.browsingData.removeCookies({
+        since: 0,
+        origins: PRE_LOGIN_COOKIE_CLEAR_ORIGINS,
+      });
+    } catch (err) {
+      await addLog(`步骤 6：browsingData 补扫 cookies 失败：${getErrorMessage(err)}`, 'warn');
+    }
+  }
+
+  await addLog(`步骤 6：已直接删除 ${removedCount} 个 ChatGPT / OpenAI cookies，准备继续获取链接并登录。`, 'ok');
+}
+
+// ============================================================
 // Step 6: Login and ensure the auth page reaches the login verification page
 // ============================================================
 
@@ -7510,6 +7646,9 @@ async function executeStep6(state) {
   if (!state.email) {
     throw new Error('缺少邮箱地址，请先完成步骤 3。');
   }
+
+  await runPreStep6CookieCleanup();
+
   let attempt = 0;
 
   while (true) {

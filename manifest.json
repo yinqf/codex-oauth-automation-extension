@@ -10,6 +10,8 @@
     "webNavigation",
     "declarativeNetRequest",
     "debugger",
+    "browsingData",
+    "cookies",
     "storage",
     "scripting",
     "activeTab"
