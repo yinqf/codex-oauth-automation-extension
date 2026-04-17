@@ -11,10 +11,16 @@ const STATUS_ICONS = {
 };
 
 const logArea = document.getElementById('log-area');
-const accountRunHistoryStrip = document.getElementById('account-run-history-strip');
-const accountRunHistoryMeta = document.getElementById('account-run-history-meta');
-const accountRunHistoryStats = document.getElementById('account-run-history-stats');
-const accountRunHistoryList = document.getElementById('account-run-history-list');
+const btnOpenAccountRecords = document.getElementById('btn-open-account-records');
+const accountRecordsOverlay = document.getElementById('account-records-overlay');
+const accountRecordsMeta = document.getElementById('account-records-meta');
+const accountRecordsStats = document.getElementById('account-records-stats');
+const accountRecordsList = document.getElementById('account-records-list');
+const accountRecordsPageLabel = document.getElementById('account-records-page-label');
+const btnAccountRecordsPrev = document.getElementById('btn-account-records-prev');
+const btnAccountRecordsNext = document.getElementById('btn-account-records-next');
+const btnCloseAccountRecords = document.getElementById('btn-close-account-records');
+const btnClearAccountRecords = document.getElementById('btn-clear-account-records');
 const updateSection = document.getElementById('update-section');
 const extensionUpdateStatus = document.getElementById('extension-update-status');
 const extensionVersionMeta = document.getElementById('extension-version-meta');
@@ -874,7 +880,7 @@ function syncLatestState(nextState) {
     stepStatuses: mergedStepStatuses,
   };
 
-  renderAccountRunHistory(latestState);
+  renderAccountRecords(latestState);
 }
 
 function hasOwnStateValue(source, key) {
@@ -1382,7 +1388,7 @@ function normalizeAccountRunHistoryHelperBaseUrlValue(value = '') {
       return DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL;
     }
 
-    if (parsed.pathname === '/append-account-log') {
+    if (parsed.pathname === '/append-account-log' || parsed.pathname === '/sync-account-run-records') {
       parsed.pathname = '';
       parsed.search = '';
       parsed.hash = '';
@@ -2697,193 +2703,6 @@ function appendLog(entry) {
   logArea.scrollTop = logArea.scrollHeight;
 }
 
-function getAccountRunHistory(state = latestState) {
-  return Array.isArray(state?.accountRunHistory)
-    ? state.accountRunHistory.filter((item) => item && typeof item === 'object')
-    : [];
-}
-
-function parseAccountRunStatus(status = '') {
-  const normalized = String(status || '').trim().toLowerCase();
-  const stepMatch = normalized.match(/^step(\d+)_(failed|stopped)$/);
-  if (stepMatch) {
-    return {
-      kind: stepMatch[2] === 'failed' ? 'failed' : 'stopped',
-      label: `步${stepMatch[1]}${stepMatch[2] === 'failed' ? '失败' : '停止'}`,
-    };
-  }
-
-  if (normalized === 'success') {
-    return { kind: 'success', label: '成功' };
-  }
-  if (normalized === 'failed') {
-    return { kind: 'failed', label: '失败' };
-  }
-  if (normalized === 'stopped') {
-    return { kind: 'stopped', label: '已停止' };
-  }
-
-  return {
-    kind: 'unknown',
-    label: normalized || '记录',
-  };
-}
-
-function summarizeAccountRunHistory(records = []) {
-  return records.reduce((summary, record) => {
-    summary.total += 1;
-    const { kind } = parseAccountRunStatus(record?.status);
-    if (kind === 'success') {
-      summary.success += 1;
-    } else if (kind === 'failed') {
-      summary.failed += 1;
-    } else if (kind === 'stopped') {
-      summary.stopped += 1;
-    } else {
-      summary.other += 1;
-    }
-    return summary;
-  }, {
-    total: 0,
-    success: 0,
-    failed: 0,
-    stopped: 0,
-    other: 0,
-  });
-}
-
-function formatAccountRunHistoryTime(recordedAt) {
-  const date = new Date(recordedAt);
-  if (Number.isNaN(date.getTime())) {
-    return '--:--';
-  }
-
-  const now = new Date();
-  const sameYear = date.getFullYear() === now.getFullYear();
-  const sameDay = date.toDateString() === now.toDateString();
-
-  if (sameDay) {
-    return date.toLocaleTimeString('zh-CN', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: DISPLAY_TIMEZONE,
-    });
-  }
-
-  return date.toLocaleString('zh-CN', {
-    hour12: false,
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    ...(sameYear ? {} : { year: '2-digit' }),
-    timeZone: DISPLAY_TIMEZONE,
-  }).replace(/\//g, '-');
-}
-
-function buildAccountRunHistoryDetailText(record = {}) {
-  const reason = String(record.reason || '').trim();
-  if (reason) {
-    return reason;
-  }
-
-  const { kind } = parseAccountRunStatus(record.status);
-  if (kind === 'success') {
-    return '流程已完成并写入本地记录';
-  }
-  if (kind === 'stopped') {
-    return '流程被手动停止，已保留当前账号快照';
-  }
-  if (kind === 'failed') {
-    return '流程执行失败，已保留当前账号快照';
-  }
-
-  return '账号运行记录已保存';
-}
-
-function createAccountRunHistoryStat(label, value, className = '') {
-  const item = document.createElement('span');
-  item.className = `account-run-history-stat${className ? ` ${className}` : ''}`;
-  item.innerHTML = `<strong>${escapeHtml(String(value))}</strong>${escapeHtml(label)}`;
-  return item;
-}
-
-function renderAccountRunHistory(state = latestState) {
-  if (!accountRunHistoryStrip || !accountRunHistoryStats || !accountRunHistoryList || !accountRunHistoryMeta) {
-    return;
-  }
-
-  const records = getAccountRunHistory(state);
-  if (!records.length) {
-    accountRunHistoryStrip.hidden = true;
-    accountRunHistoryStats.innerHTML = '';
-    accountRunHistoryList.innerHTML = '';
-    accountRunHistoryMeta.textContent = '最近运行记录';
-    return;
-  }
-
-  const summary = summarizeAccountRunHistory(records);
-  const recentRecords = records.slice(-2).reverse();
-  const latestRecord = records[records.length - 1] || null;
-
-  accountRunHistoryStrip.hidden = false;
-  accountRunHistoryMeta.textContent = latestRecord
-    ? `共 ${summary.total} 条，最近更新于 ${formatAccountRunHistoryTime(latestRecord.recordedAt)}`
-    : `共 ${summary.total} 条`;
-
-  accountRunHistoryStats.innerHTML = '';
-  accountRunHistoryStats.appendChild(createAccountRunHistoryStat('总', summary.total));
-  if (summary.success > 0) {
-    accountRunHistoryStats.appendChild(createAccountRunHistoryStat('成', summary.success, 'is-success'));
-  }
-  if (summary.failed > 0) {
-    accountRunHistoryStats.appendChild(createAccountRunHistoryStat('失', summary.failed, 'is-failed'));
-  }
-  if (summary.stopped > 0) {
-    accountRunHistoryStats.appendChild(createAccountRunHistoryStat('停', summary.stopped, 'is-stopped'));
-  }
-
-  accountRunHistoryList.innerHTML = '';
-  recentRecords.forEach((record) => {
-    const statusMeta = parseAccountRunStatus(record.status);
-    const item = document.createElement('div');
-    item.className = `account-run-history-item is-${statusMeta.kind}`;
-    item.title = [
-      record.email || '',
-      statusMeta.label,
-      record.reason || '',
-    ].filter(Boolean).join('\n');
-
-    const main = document.createElement('div');
-    main.className = 'account-run-history-item-main';
-
-    const email = document.createElement('div');
-    email.className = 'account-run-history-item-email mono';
-    email.textContent = String(record.email || '').trim() || '(空邮箱)';
-
-    const detail = document.createElement('div');
-    detail.className = 'account-run-history-item-detail';
-    detail.textContent = buildAccountRunHistoryDetailText(record);
-
-    const side = document.createElement('div');
-    side.className = 'account-run-history-item-side';
-
-    const status = document.createElement('span');
-    status.className = 'account-run-history-item-status';
-    status.textContent = statusMeta.label;
-
-    const time = document.createElement('span');
-    time.className = 'account-run-history-item-time mono';
-    time.textContent = formatAccountRunHistoryTime(record.recordedAt);
-
-    main.append(email, detail);
-    side.append(status, time);
-    item.append(main, side);
-    accountRunHistoryList.appendChild(item);
-  });
-}
-
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
@@ -3108,6 +2927,42 @@ const resetLuckmailManager = luckmailManager?.reset
 const bindLuckmailEvents = luckmailManager?.bindLuckmailEvents
   || (() => { });
 bindLuckmailEvents();
+
+const accountRecordsManager = window.SidepanelAccountRecordsManager?.createAccountRecordsManager({
+  state: {
+    getLatestState: () => latestState,
+    syncLatestState,
+  },
+  dom: {
+    accountRecordsList,
+    accountRecordsMeta,
+    accountRecordsOverlay,
+    accountRecordsPageLabel,
+    accountRecordsStats,
+    btnAccountRecordsNext,
+    btnAccountRecordsPrev,
+    btnClearAccountRecords,
+    btnCloseAccountRecords,
+    btnOpenAccountRecords,
+  },
+  helpers: {
+    escapeHtml,
+    openConfirmModal,
+    showToast,
+  },
+  runtime: {
+    sendMessage: (message) => chrome.runtime.sendMessage(message),
+  },
+  constants: {
+    displayTimeZone: DISPLAY_TIMEZONE,
+    pageSize: 10,
+  },
+});
+const renderAccountRecords = accountRecordsManager?.render
+  || (() => { });
+const bindAccountRecordEvents = accountRecordsManager?.bindEvents
+  || (() => { });
+bindAccountRecordEvents();
 renderStepsList();
 
 async function exportSettingsFile() {

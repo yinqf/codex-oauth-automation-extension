@@ -1668,59 +1668,88 @@ header {
   margin-bottom: 6px;
 }
 
-.account-run-history-strip {
-  margin-bottom: 8px;
-  padding: 10px 12px;
+.log-header-actions {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--bg-base) 72%, var(--blue-soft)),
-      color-mix(in srgb, var(--bg-surface) 92%, var(--bg-base))
-    );
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
+  align-items: center;
+  gap: 6px;
 }
 
-.account-run-history-head {
+.account-records-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1210;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: rgba(15, 17, 23, 0.32);
+  backdrop-filter: blur(2px);
+}
+
+.account-records-overlay[hidden] {
+  display: none !important;
+}
+
+.account-records-panel {
+  width: min(100%, 420px);
+  max-height: calc(100vh - 24px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--bg-base) 82%, var(--blue-soft)),
+      color-mix(in srgb, var(--bg-surface) 96%, var(--bg-base))
+    );
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md), 0 18px 36px rgba(0, 0, 0, 0.18);
+}
+
+.account-records-panel-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
 }
 
-.account-run-history-copy {
+.account-records-panel-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
 
-.account-run-history-title {
-  font-size: 12px;
+.account-records-panel-title {
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text-primary);
 }
 
-.account-run-history-meta {
+.account-records-panel-meta {
   font-size: 11px;
   color: var(--text-secondary);
   line-height: 1.45;
 }
 
-.account-run-history-stats {
+.account-records-panel-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  flex-wrap: wrap;
   flex-shrink: 0;
 }
 
-.account-run-history-stat {
+.account-records-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.account-records-stat {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1733,55 +1762,80 @@ header {
   color: var(--text-secondary);
 }
 
-.account-run-history-stat strong {
+.account-records-stat strong {
   font-family: 'JetBrains Mono', 'Consolas', monospace;
   font-size: 10px;
 }
 
-.account-run-history-stat.is-success {
+.account-records-stat.is-success {
   color: var(--green);
   background: var(--green-soft);
   border-color: color-mix(in srgb, var(--green) 16%, var(--border));
 }
 
-.account-run-history-stat.is-failed {
+.account-records-stat.is-failed {
   color: var(--red);
   background: var(--red-soft);
   border-color: color-mix(in srgb, var(--red) 16%, var(--border));
 }
 
-.account-run-history-stat.is-stopped {
-  color: var(--cyan);
-  background: color-mix(in srgb, var(--cyan) 12%, var(--bg-base));
-  border-color: color-mix(in srgb, var(--cyan) 16%, var(--border));
+.account-records-stat.is-retry {
+  color: var(--blue);
+  background: var(--blue-soft);
+  border-color: color-mix(in srgb, var(--blue) 16%, var(--border));
 }
 
-.account-run-history-list {
+.account-records-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 168px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
-.account-run-history-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
+.account-records-list::-webkit-scrollbar { width: 5px; }
+.account-records-list::-webkit-scrollbar-track { background: transparent; }
+.account-records-list::-webkit-scrollbar-thumb { background: var(--bg-elevated); border-radius: 4px; }
+.account-records-list::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+.account-records-empty {
+  min-height: 168px;
+  display: flex;
   align-items: center;
-  padding: 8px 9px;
+  justify-content: center;
+  padding: 20px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-base) 92%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.account-record-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 11px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--bg-base) 90%, transparent);
+  box-shadow: var(--shadow-sm);
 }
 
-.account-run-history-item-main {
-  min-width: 0;
+.account-record-item-top,
+.account-record-item-bottom {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.account-run-history-item-email {
+.account-record-item-email {
   min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1790,24 +1844,14 @@ header {
   font-weight: 600;
 }
 
-.account-run-history-item-detail {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.account-run-history-item-side {
+.account-record-item-side {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
 }
 
-.account-run-history-item-status {
+.account-record-item-status {
   display: inline-flex;
   align-items: center;
   padding: 2px 7px;
@@ -1818,36 +1862,64 @@ header {
   color: var(--text-secondary);
 }
 
-.account-run-history-item-time {
+.account-record-item-time {
   color: var(--text-muted);
   font-size: 11px;
 }
 
-.account-run-history-item.is-success {
+.account-record-item-summary {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.account-record-item-retry {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-base) 70%, var(--blue-soft));
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.account-record-item.is-success {
   border-color: color-mix(in srgb, var(--green) 14%, var(--border-subtle));
 }
 
-.account-run-history-item.is-success .account-run-history-item-status {
+.account-record-item.is-success .account-record-item-status {
   background: var(--green-soft);
   color: var(--green);
 }
 
-.account-run-history-item.is-failed {
+.account-record-item.is-failed {
   border-color: color-mix(in srgb, var(--red) 14%, var(--border-subtle));
 }
 
-.account-run-history-item.is-failed .account-run-history-item-status {
+.account-record-item.is-failed .account-record-item-status {
   background: var(--red-soft);
   color: var(--red);
 }
 
-.account-run-history-item.is-stopped {
-  border-color: color-mix(in srgb, var(--cyan) 14%, var(--border-subtle));
+.account-records-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.account-run-history-item.is-stopped .account-run-history-item-status {
-  background: color-mix(in srgb, var(--cyan) 12%, var(--bg-base));
-  color: var(--cyan);
+.account-records-page-label {
+  min-width: 56px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 #log-area {

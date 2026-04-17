@@ -722,7 +722,7 @@ function normalizeAccountRunHistoryHelperBaseUrl(rawValue = '') {
 
   try {
     const parsed = new URL(value);
-    if (parsed.pathname === '/append-account-log') {
+    if (parsed.pathname === '/append-account-log' || parsed.pathname === '/sync-account-run-records') {
       parsed.pathname = '';
       parsed.search = '';
       parsed.hash = '';
@@ -5055,6 +5055,16 @@ async function appendAndBroadcastAccountRunRecord(status, stateOverride = null, 
   return record;
 }
 
+async function clearAndBroadcastAccountRunHistory(stateOverride = null) {
+  if (!accountRunHistoryHelpers?.clearAccountRunHistory) {
+    return { clearedCount: 0 };
+  }
+
+  const result = await accountRunHistoryHelpers.clearAccountRunHistory(stateOverride);
+  await broadcastAccountRunHistoryUpdate();
+  return result;
+}
+
 const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoRunController({
   addLog,
   appendAccountRunRecord: (...args) => appendAndBroadcastAccountRunRecord(...args),
@@ -5757,6 +5767,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   broadcastDataUpdate,
   cancelScheduledAutoRun,
   checkIcloudSession,
+  clearAccountRunHistory: (...args) => clearAndBroadcastAccountRunHistory(...args),
   clearAutoRunTimerAlarm,
   clearLuckmailRuntimeState,
   clearStopRequest,

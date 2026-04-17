@@ -12,6 +12,7 @@
       broadcastDataUpdate,
       cancelScheduledAutoRun,
       checkIcloudSession,
+      clearAccountRunHistory,
       clearAutoRunTimerAlarm,
       clearLuckmailRuntimeState,
       clearStopRequest,
@@ -268,6 +269,18 @@
           await resetState();
           await addLog('流程已重置', 'info');
           return { ok: true };
+        }
+
+        case 'CLEAR_ACCOUNT_RUN_HISTORY': {
+          const state = await getState();
+          if (isAutoRunLockedState(state)) {
+            throw new Error('自动流程运行中，当前不能清理邮箱记录。');
+          }
+          if (typeof clearAccountRunHistory !== 'function') {
+            return { ok: true, clearedCount: 0 };
+          }
+          const result = await clearAccountRunHistory(state);
+          return { ok: true, ...result };
         }
 
         case 'EXECUTE_STEP': {

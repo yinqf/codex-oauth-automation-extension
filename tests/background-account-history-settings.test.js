@@ -106,6 +106,10 @@ return {
     'http://127.0.0.1:17373'
   );
   assert.equal(
+    api.normalizePersistentSettingValue('accountRunHistoryHelperBaseUrl', 'http://127.0.0.1:17373/sync-account-run-records'),
+    'http://127.0.0.1:17373'
+  );
+  assert.equal(
     api.normalizeAccountRunHistoryHelperBaseUrl(''),
     'http://127.0.0.1:17373'
   );

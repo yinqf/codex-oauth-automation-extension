@@ -289,7 +289,7 @@
         </div>
       </div>
       <div class="data-row">
-        <span class="data-label">本地留档</span>
+        <span class="data-label">本地同步</span>
         <div class="data-inline auto-delay-inline">
           <label class="toggle-switch" for="input-account-run-history-text-enabled">
             <input type="checkbox" id="input-account-run-history-text-enabled" />
@@ -308,7 +308,7 @@
         </div>
       </div>
       <div class="data-row" id="row-account-run-history-helper-base-url" style="display:none;">
-        <span class="data-label">留档服务</span>
+        <span class="data-label">同步服务</span>
         <input type="text" id="input-account-run-history-helper-base-url" class="data-input mono" placeholder="http://127.0.0.1:17373" />
       </div>
       <div class="data-row">
@@ -555,20 +555,35 @@
   <section id="log-section">
     <div class="log-header">
       <span class="section-label">日志</span>
-      <button id="btn-clear-log" class="btn btn-ghost btn-xs" title="清空日志">清空</button>
-    </div>
-    <div id="account-run-history-strip" class="account-run-history-strip" hidden>
-      <div class="account-run-history-head">
-        <div class="account-run-history-copy">
-          <span class="account-run-history-title">账号运行历史</span>
-          <span id="account-run-history-meta" class="account-run-history-meta">最近运行记录</span>
-        </div>
-        <div id="account-run-history-stats" class="account-run-history-stats"></div>
+      <div class="log-header-actions">
+        <button id="btn-open-account-records" class="btn btn-ghost btn-xs" title="查看邮箱记录">记录</button>
+        <button id="btn-clear-log" class="btn btn-ghost btn-xs" title="清空日志">清空</button>
       </div>
-      <div id="account-run-history-list" class="account-run-history-list"></div>
     </div>
     <div id="log-area"></div>
   </section>
+
+  <div id="account-records-overlay" class="account-records-overlay" hidden>
+    <div class="account-records-panel">
+      <div class="account-records-panel-header">
+        <div class="account-records-panel-copy">
+          <span class="account-records-panel-title">邮箱记录</span>
+          <span id="account-records-meta" class="account-records-panel-meta">暂无邮箱记录</span>
+        </div>
+        <div class="account-records-panel-actions">
+          <button id="btn-clear-account-records" class="btn btn-ghost btn-xs" type="button">清理记录</button>
+          <button id="btn-close-account-records" class="modal-close" type="button" aria-label="关闭">×</button>
+        </div>
+      </div>
+      <div id="account-records-stats" class="account-records-stats"></div>
+      <div id="account-records-list" class="account-records-list"></div>
+      <div class="account-records-pagination">
+        <button id="btn-account-records-prev" class="btn btn-outline btn-xs" type="button">上一页</button>
+        <span id="account-records-page-label" class="account-records-page-label mono">0 / 0</span>
+        <button id="btn-account-records-next" class="btn btn-outline btn-xs" type="button">下一页</button>
+      </div>
+    </div>
+  </div>
 
   <div id="auto-start-modal" class="modal-overlay" hidden>
     <div class="modal-card">
@@ -603,6 +618,7 @@
   <script src="hotmail-manager.js"></script>
   <script src="icloud-manager.js"></script>
   <script src="luckmail-manager.js"></script>
+  <script src="account-records-manager.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 
