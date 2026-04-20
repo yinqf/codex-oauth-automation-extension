@@ -21,7 +21,10 @@ const btnAccountRecordsPrev = document.getElementById('btn-account-records-prev'
 const btnAccountRecordsNext = document.getElementById('btn-account-records-next');
 const btnCloseAccountRecords = document.getElementById('btn-close-account-records');
 const btnClearAccountRecords = document.getElementById('btn-clear-account-records');
+const btnToggleAccountRecordsSelection = document.getElementById('btn-toggle-account-records-selection');
+const btnDeleteSelectedAccountRecords = document.getElementById('btn-delete-selected-account-records');
 const updateSection = document.getElementById('update-section');
+const btnRepoHome = document.getElementById('btn-repo-home');
 const extensionUpdateStatus = document.getElementById('extension-update-status');
 const extensionVersionMeta = document.getElementById('extension-version-meta');
 const btnReleaseLog = document.getElementById('btn-release-log');
@@ -30,6 +33,16 @@ const updateCardSummary = document.getElementById('update-card-summary');
 const updateReleaseList = document.getElementById('update-release-list');
 const btnOpenRelease = document.getElementById('btn-open-release');
 const settingsCard = document.getElementById('settings-card');
+const contributionModePanel = document.getElementById('contribution-mode-panel');
+const contributionModeText = document.getElementById('contribution-mode-text');
+const inputContributionNickname = document.getElementById('input-contribution-nickname');
+const inputContributionQq = document.getElementById('input-contribution-qq');
+const contributionOauthStatus = document.getElementById('contribution-oauth-status');
+const contributionCallbackStatus = document.getElementById('contribution-callback-status');
+const contributionModeSummary = document.getElementById('contribution-mode-summary');
+const btnStartContribution = document.getElementById('btn-start-contribution');
+const btnOpenContributionUpload = document.getElementById('btn-open-contribution-upload');
+const btnExitContributionMode = document.getElementById('btn-exit-contribution-mode');
 const displayOauthUrl = document.getElementById('display-oauth-url');
 const displayLocalhostUrl = document.getElementById('display-localhost-url');
 const displayStatus = document.getElementById('display-status');
@@ -48,6 +61,7 @@ const btnTogglePassword = document.getElementById('btn-toggle-password');
 const btnSaveSettings = document.getElementById('btn-save-settings');
 const btnStop = document.getElementById('btn-stop');
 const btnReset = document.getElementById('btn-reset');
+const btnContributionMode = document.getElementById('btn-contribution-mode');
 const stepsProgress = document.getElementById('steps-progress');
 const btnAutoRun = document.getElementById('btn-auto-run');
 const btnAutoContinue = document.getElementById('btn-auto-continue');
@@ -71,8 +85,6 @@ const rowVpsPassword = document.getElementById('row-vps-password');
 const inputVpsPassword = document.getElementById('input-vps-password');
 const rowLocalCpaStep9Mode = document.getElementById('row-local-cpa-step9-mode');
 const localCpaStep9ModeButtons = Array.from(document.querySelectorAll('[data-local-cpa-step9-mode]'));
-const rowCpaCallbackMode = document.getElementById('row-cpa-callback-mode');
-const cpaCallbackModeButtons = Array.from(document.querySelectorAll('[data-cpa-callback-mode]'));
 const rowSub2ApiUrl = document.getElementById('row-sub2api-url');
 const inputSub2ApiUrl = document.getElementById('input-sub2api-url');
 const rowSub2ApiEmail = document.getElementById('row-sub2api-email');
@@ -81,6 +93,9 @@ const rowSub2ApiPassword = document.getElementById('row-sub2api-password');
 const inputSub2ApiPassword = document.getElementById('input-sub2api-password');
 const rowSub2ApiGroup = document.getElementById('row-sub2api-group');
 const inputSub2ApiGroup = document.getElementById('input-sub2api-group');
+const rowSub2ApiDefaultProxy = document.getElementById('row-sub2api-default-proxy');
+const inputSub2ApiDefaultProxy = document.getElementById('input-sub2api-default-proxy');
+const rowCustomPassword = document.getElementById('row-custom-password');
 const selectMailProvider = document.getElementById('select-mail-provider');
 const btnMailLogin = document.getElementById('btn-mail-login');
 const rowMail2925Mode = document.getElementById('row-mail-2925-mode');
@@ -176,6 +191,7 @@ const inputAutoDelayEnabled = document.getElementById('input-auto-delay-enabled'
 const inputAutoDelayMinutes = document.getElementById('input-auto-delay-minutes');
 const inputAutoStepDelaySeconds = document.getElementById('input-auto-step-delay-seconds');
 const inputVerificationResendCount = document.getElementById('input-verification-resend-count');
+const rowAccountRunHistoryTextEnabled = document.getElementById('row-account-run-history-text-enabled');
 const inputAccountRunHistoryTextEnabled = document.getElementById('input-account-run-history-text-enabled');
 const rowAccountRunHistoryHelperBaseUrl = document.getElementById('row-account-run-history-helper-base-url');
 const inputAccountRunHistoryHelperBaseUrl = document.getElementById('input-account-run-history-helper-base-url');
@@ -209,7 +225,7 @@ const VERIFICATION_RESEND_COUNT_MIN = 0;
 const VERIFICATION_RESEND_COUNT_MAX = 20;
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
-const DEFAULT_CPA_CALLBACK_MODE = 'step9';
+const DEFAULT_CPA_CALLBACK_MODE = 'step8';
 const MAIL_2925_MODE_PROVIDE = 'provide';
 const MAIL_2925_MODE_RECEIVE = 'receive';
 const DEFAULT_MAIL_2925_MODE = MAIL_2925_MODE_PROVIDE;
@@ -776,18 +792,23 @@ async function openAutoRunFallbackRiskConfirmModal(totalRuns, fallbackThreadInte
 
 function updateConfigMenuControls() {
   const disabled = configActionInFlight || settingsSaveInFlight;
+  const contributionModeEnabled = Boolean(latestState?.contributionMode);
+  if (contributionModeEnabled && configMenuOpen) {
+    configMenuOpen = false;
+  }
   const importLocked = disabled
+    || contributionModeEnabled
     || currentAutoRun.autoRunning
     || Object.values(getStepStatuses()).some((status) => status === 'running');
   if (btnConfigMenu) {
-    btnConfigMenu.disabled = disabled;
+    btnConfigMenu.disabled = disabled || contributionModeEnabled;
     btnConfigMenu.setAttribute('aria-expanded', String(configMenuOpen));
   }
   if (configMenu) {
-    configMenu.hidden = !configMenuOpen;
+    configMenu.hidden = contributionModeEnabled || !configMenuOpen;
   }
   if (btnExportSettings) {
-    btnExportSettings.disabled = disabled;
+    btnExportSettings.disabled = disabled || contributionModeEnabled;
   }
   if (btnImportSettings) {
     btnImportSettings.disabled = importLocked;
@@ -870,6 +891,12 @@ function hasSavedProgress(state = latestState) {
   return Object.values(statuses).some((status) => status !== 'pending');
 }
 
+function isContributionModeSwitchBlocked(state = latestState) {
+  const statuses = getStepStatuses(state);
+  const anyRunning = Object.values(statuses).some((status) => status === 'running');
+  return anyRunning || isAutoRunLockedPhase() || isAutoRunPausedPhase() || isAutoRunScheduledPhase();
+}
+
 function shouldOfferAutoModeChoice(state = latestState) {
   return hasSavedProgress(state) && getFirstUnfinishedStep(state) !== null;
 }
@@ -920,6 +947,20 @@ function syncAutoRunState(source = {}) {
     countdownTitle: readAutoRunStateValue(source, ['autoRunCountdownTitle', 'countdownTitle'], currentAutoRun.countdownTitle),
     countdownNote: readAutoRunStateValue(source, ['autoRunCountdownNote', 'countdownNote'], currentAutoRun.countdownNote),
   };
+}
+
+function isContributionButtonLocked() {
+  const autoActive = currentAutoRun.autoRunning
+    || isAutoRunLockedPhase()
+    || isAutoRunPausedPhase()
+    || isAutoRunScheduledPhase();
+  if (autoActive) {
+    return false;
+  }
+
+  const statuses = getStepStatuses();
+  const anyRunning = Object.values(statuses).some((status) => status === 'running');
+  return anyRunning;
 }
 
 function isAutoRunLockedPhase() {
@@ -1305,31 +1346,39 @@ function collectSettingsPayload() {
   const selectedCloudflareTempEmailDomain = normalizeCloudflareTempEmailDomainValue(
     !cloudflareTempEmailDomainEditMode ? selectTempEmailDomain.value : tempEmailActiveDomain
   ) || tempEmailActiveDomain;
+  const cpaUploadAccountsText = typeof inputCpaUploadAccounts !== 'undefined'
+    ? (inputCpaUploadAccounts?.value || '')
+    : '';
+  const contributionModeEnabled = Boolean(latestState?.contributionMode);
   return {
     panelMode: selectPanelMode.value,
     vpsUrl: inputVpsUrl.value.trim(),
     vpsPassword: inputVpsPassword.value,
     localCpaStep9Mode: getSelectedLocalCpaStep9Mode(),
-    cpaCallbackMode: getSelectedCpaCallbackMode(),
     sub2apiUrl: inputSub2ApiUrl.value.trim(),
     sub2apiEmail: inputSub2ApiEmail.value.trim(),
     sub2apiPassword: inputSub2ApiPassword.value,
     sub2apiGroupName: inputSub2ApiGroup.value.trim(),
-    customPassword: inputPassword.value,
+    sub2apiDefaultProxyName: inputSub2ApiDefaultProxy.value.trim(),
+    ...(contributionModeEnabled ? {} : {
+      customPassword: inputPassword.value,
+    }),
     mailProvider: selectMailProvider.value,
     mail2925Mode: getSelectedMail2925Mode(),
     emailGenerator: selectEmailGenerator.value,
     autoDeleteUsedIcloudAlias: checkboxAutoDeleteIcloud?.checked,
     icloudHostPreference: selectIcloudHostPreference?.value || 'auto',
-    accountRunHistoryTextEnabled: Boolean(inputAccountRunHistoryTextEnabled?.checked),
-    accountRunHistoryHelperBaseUrl: normalizeAccountRunHistoryHelperBaseUrlValue(inputAccountRunHistoryHelperBaseUrl?.value),
+    ...(contributionModeEnabled ? {} : {
+      accountRunHistoryTextEnabled: Boolean(inputAccountRunHistoryTextEnabled?.checked),
+      accountRunHistoryHelperBaseUrl: normalizeAccountRunHistoryHelperBaseUrlValue(inputAccountRunHistoryHelperBaseUrl?.value),
+    }),
     ...buildManagedAliasBaseEmailPayload(),
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
     hotmailServiceMode: getSelectedHotmailServiceMode(),
     hotmailRemoteBaseUrl: inputHotmailRemoteBaseUrl.value.trim(),
     hotmailLocalBaseUrl: inputHotmailLocalBaseUrl.value.trim(),
-    cpaUploadAccountsText: inputCpaUploadAccounts?.value || '',
+    cpaUploadAccountsText,
     luckmailApiKey: inputLuckmailApiKey.value,
     luckmailBaseUrl: normalizeLuckmailBaseUrl(inputLuckmailBaseUrl.value),
     luckmailEmailType: normalizeLuckmailEmailType(selectLuckmailEmailType.value),
@@ -1358,17 +1407,6 @@ function normalizeLocalCpaStep9Mode(value = '') {
   return String(value || '').trim().toLowerCase() === 'bypass'
     ? 'bypass'
     : DEFAULT_LOCAL_CPA_STEP9_MODE;
-}
-
-function normalizeCpaCallbackMode(value = '') {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'step7' || normalized === 'step6') {
-    return 'step7';
-  }
-  if (normalized === 'step9' || normalized === 'step8') {
-    return 'step9';
-  }
-  return DEFAULT_CPA_CALLBACK_MODE;
 }
 
 function normalizeMail2925Mode(value = '') {
@@ -1424,20 +1462,6 @@ function setLocalCpaStep9Mode(mode) {
   });
 }
 
-function getSelectedCpaCallbackMode() {
-  const activeButton = cpaCallbackModeButtons.find((button) => button.classList.contains('is-active'));
-  return normalizeCpaCallbackMode(activeButton?.dataset.cpaCallbackMode);
-}
-
-function setCpaCallbackMode(mode) {
-  const resolvedMode = normalizeCpaCallbackMode(mode);
-  cpaCallbackModeButtons.forEach((button) => {
-    const active = button.dataset.cpaCallbackMode === resolvedMode;
-    button.classList.toggle('is-active', active);
-    button.setAttribute('aria-pressed', String(active));
-  });
-}
-
 function getSelectedMail2925Mode() {
   const activeButton = mail2925ModeButtons.find((button) => button.classList.contains('is-active'));
   return normalizeMail2925Mode(activeButton?.dataset.mail2925Mode);
@@ -1473,7 +1497,9 @@ function updateAccountRunHistorySettingsUI() {
     return;
   }
 
-  rowAccountRunHistoryHelperBaseUrl.style.display = inputAccountRunHistoryTextEnabled.checked ? '' : 'none';
+  rowAccountRunHistoryHelperBaseUrl.style.display = inputAccountRunHistoryTextEnabled.checked && !latestState?.contributionMode
+    ? ''
+    : 'none';
 }
 
 function setSettingsCardLocked(locked) {
@@ -1644,6 +1670,7 @@ function applyAutoRunStatus(payload = currentAutoRun) {
   syncScheduledCountdownTicker();
   updateStopButtonState(scheduled || paused || locked || Object.values(getStepStatuses()).some(status => status === 'running'));
   updateConfigMenuControls();
+  renderContributionMode();
 }
 
 function initializeManualStepActions() {
@@ -1709,12 +1736,12 @@ function applySettingsState(state) {
     inputCpaUploadAccounts.value = state?.cpaUploadAccountsText || '';
   }
   setLocalCpaStep9Mode(state?.localCpaStep9Mode);
-  setCpaCallbackMode(state?.cpaCallbackMode);
   selectPanelMode.value = state?.panelMode || 'cpa';
   inputSub2ApiUrl.value = state?.sub2apiUrl || '';
   inputSub2ApiEmail.value = state?.sub2apiEmail || '';
   inputSub2ApiPassword.value = state?.sub2apiPassword || '';
   inputSub2ApiGroup.value = state?.sub2apiGroupName || '';
+  inputSub2ApiDefaultProxy.value = state?.sub2apiDefaultProxyName || '';
   const restoredMailProvider = isCustomMailProvider(state?.mailProvider)
     || [ICLOUD_PROVIDER, 'hotmail-api', GMAIL_PROVIDER, 'luckmail-api', '163', '163-vip', 'qq', 'inbucket', '2925', 'cloudflare-temp-email'].includes(String(state?.mailProvider || '').trim())
     ? String(state?.mailProvider || '163').trim()
@@ -1749,6 +1776,12 @@ function applySettingsState(state) {
   }
   if (inputAccountRunHistoryHelperBaseUrl) {
     inputAccountRunHistoryHelperBaseUrl.value = normalizeAccountRunHistoryHelperBaseUrlValue(state?.accountRunHistoryHelperBaseUrl);
+  }
+  if (inputContributionNickname) {
+    inputContributionNickname.value = state?.contributionNickname || '';
+  }
+  if (inputContributionQq) {
+    inputContributionQq.value = state?.contributionQq || '';
   }
   setManagedAliasBaseEmailInputForProvider(restoredMailProvider, state);
   inputInbucketHost.value = state?.inbucketHost || '';
@@ -1828,6 +1861,7 @@ async function restoreState() {
 
     updateStatusDisplay(latestState);
     updateProgressCounter();
+    renderContributionMode();
   } catch (err) {
     console.error('Failed to restore state:', err);
   }
@@ -1847,6 +1881,42 @@ function openExternalUrl(url) {
   }
 
   window.open(targetUrl, '_blank', 'noopener');
+}
+
+function getRepositoryHomeUrl() {
+  const serviceRepositoryUrl = String(sidepanelUpdateService?.repositoryUrl || '').trim();
+  if (serviceRepositoryUrl) {
+    return serviceRepositoryUrl;
+  }
+
+  const releasesPageUrl = String(sidepanelUpdateService?.releasesPageUrl || '').trim();
+  if (releasesPageUrl) {
+    return releasesPageUrl.replace(/\/releases\/?$/, '');
+  }
+
+  return 'https://github.com/QLHazyCoder/codex-oauth-automation-extension';
+}
+
+function getReleaseListUrl() {
+  const snapshotReleaseListUrl = String(currentReleaseSnapshot?.releasesPageUrl || '').trim();
+  if (snapshotReleaseListUrl) {
+    return snapshotReleaseListUrl;
+  }
+
+  const serviceReleaseListUrl = String(sidepanelUpdateService?.releasesPageUrl || '').trim();
+  if (serviceReleaseListUrl) {
+    return serviceReleaseListUrl;
+  }
+
+  return `${getRepositoryHomeUrl()}/releases`;
+}
+
+function openRepositoryHomePage() {
+  openExternalUrl(getRepositoryHomeUrl());
+}
+
+function openReleaseListPage() {
+  openExternalUrl(getReleaseListUrl());
 }
 
 function createUpdateNoteList(notes = []) {
@@ -2042,7 +2112,7 @@ async function initializeReleaseInfo() {
 }
 
 function syncPasswordField(state) {
-  inputPassword.value = state.customPassword || state.password || '';
+  inputPassword.value = state?.contributionMode ? '' : (state.customPassword || state.password || '');
 }
 
 function isCustomMailProvider(provider = selectMailProvider.value) {
@@ -2505,13 +2575,13 @@ function updatePanelModeUI() {
   rowVpsUrl.style.display = useSub2Api ? 'none' : '';
   rowVpsPassword.style.display = useSub2Api ? 'none' : '';
   rowLocalCpaStep9Mode.style.display = useSub2Api ? 'none' : '';
-  rowCpaCallbackMode.style.display = useSub2Api ? 'none' : '';
   if (rowCpaUpload) rowCpaUpload.style.display = useSub2Api ? 'none' : '';
   if (rowCpaUploadActions) rowCpaUploadActions.style.display = useSub2Api ? 'none' : '';
   rowSub2ApiUrl.style.display = useSub2Api ? '' : 'none';
   rowSub2ApiEmail.style.display = useSub2Api ? '' : 'none';
   rowSub2ApiPassword.style.display = useSub2Api ? '' : 'none';
   rowSub2ApiGroup.style.display = useSub2Api ? '' : 'none';
+  rowSub2ApiDefaultProxy.style.display = useSub2Api ? '' : 'none';
 
   const step9Btn = document.querySelector('.step-btn[data-step-key="platform-verify"]');
   if (step9Btn) {
@@ -2607,7 +2677,9 @@ function updateButtonStates() {
   if (btnIcloudDeleteUsed) btnIcloudDeleteUsed.disabled = disableIcloudControls || !hasDeletableUsedIcloudAliases();
   if (selectIcloudHostPreference) selectIcloudHostPreference.disabled = disableIcloudControls;
   if (checkboxAutoDeleteIcloud) checkboxAutoDeleteIcloud.disabled = disableIcloudControls;
+  if (btnContributionMode) btnContributionMode.disabled = isContributionButtonLocked();
   updateStopButtonState(anyRunning || autoScheduled || isAutoRunPausedPhase() || autoLocked);
+  renderContributionMode();
 }
 
 function updateStopButtonState(active) {
@@ -2962,8 +3034,10 @@ const accountRecordsManager = window.SidepanelAccountRecordsManager?.createAccou
     btnAccountRecordsNext,
     btnAccountRecordsPrev,
     btnClearAccountRecords,
+    btnDeleteSelectedAccountRecords,
     btnCloseAccountRecords,
     btnOpenAccountRecords,
+    btnToggleAccountRecordsSelection,
   },
   helpers: {
     escapeHtml,
@@ -2982,7 +3056,72 @@ const renderAccountRecords = accountRecordsManager?.render
   || (() => { });
 const bindAccountRecordEvents = accountRecordsManager?.bindEvents
   || (() => { });
+const closeAccountRecordsPanel = accountRecordsManager?.closePanel
+  || (() => { });
 bindAccountRecordEvents();
+const contributionModeManager = window.SidepanelContributionMode?.createContributionModeManager({
+  state: {
+    getLatestState: () => latestState,
+  },
+  dom: {
+    btnConfigMenu,
+    btnContributionMode,
+    inputContributionNickname,
+    inputContributionQq,
+    contributionCallbackStatus,
+    btnExitContributionMode,
+    btnOpenAccountRecords,
+    btnOpenContributionUpload,
+    btnStartContribution,
+    contributionModePanel,
+    contributionModeSummary,
+    contributionModeText,
+    contributionOauthStatus,
+    rowAccountRunHistoryHelperBaseUrl,
+    rowAccountRunHistoryTextEnabled,
+    rowCustomPassword,
+    rowLocalCpaStep9Mode,
+    rowSub2ApiDefaultProxy,
+    rowSub2ApiEmail,
+    rowSub2ApiGroup,
+    rowSub2ApiPassword,
+    rowSub2ApiUrl,
+    rowVpsPassword,
+    rowVpsUrl,
+    selectPanelMode,
+  },
+  helpers: {
+    applySettingsState,
+    closeAccountRecordsPanel,
+    closeConfigMenu,
+    getContributionNickname: () => latestState?.email || '',
+    getContributionProfile: () => ({
+      nickname: String(inputContributionNickname?.value || '').trim(),
+      qq: String(inputContributionQq?.value || '').trim(),
+    }),
+    isModeSwitchBlocked: isContributionModeSwitchBlocked,
+    openConfirmModal,
+    openExternalUrl,
+    showToast,
+    startContributionAutoRun: () => startAutoRunFromCurrentSettings(),
+    updateAccountRunHistorySettingsUI,
+    updateConfigMenuControls,
+    updatePanelModeUI,
+    updateStatusDisplay,
+  },
+  runtime: {
+    sendMessage: (message) => chrome.runtime.sendMessage(message),
+  },
+  constants: {
+    contributionOauthUrl: 'https://apikey.qzz.io/oauth/',
+    contributionUploadUrl: 'https://apikey.qzz.io/',
+  },
+});
+const renderContributionMode = contributionModeManager?.render
+  || (() => { });
+const bindContributionModeEvents = contributionModeManager?.bindEvents
+  || (() => { });
+bindContributionModeEvents();
 renderStepsList();
 
 async function exportSettingsFile() {
@@ -3311,18 +3450,6 @@ localCpaStep9ModeButtons.forEach((button) => {
   });
 });
 
-cpaCallbackModeButtons.forEach((button) => {
-  button.addEventListener('click', () => {
-    const nextMode = button.dataset.cpaCallbackMode;
-    if (getSelectedCpaCallbackMode() === normalizeCpaCallbackMode(nextMode)) {
-      return;
-    }
-    setCpaCallbackMode(nextMode);
-    markSettingsDirty(true);
-    saveSettings({ silent: true }).catch(() => { });
-  });
-});
-
 hotmailServiceModeButtons.forEach((button) => {
   button.addEventListener('click', () => {
     if (button.disabled) {
@@ -3356,6 +3483,14 @@ btnStop.addEventListener('click', async () => {
 btnConfigMenu?.addEventListener('click', (event) => {
   event.stopPropagation();
   toggleConfigMenu();
+});
+
+btnRepoHome?.addEventListener('click', () => {
+  openRepositoryHomePage();
+});
+
+extensionUpdateStatus?.addEventListener('click', () => {
+  openReleaseListPage();
 });
 
 configMenu?.addEventListener('click', (event) => {
@@ -3392,9 +3527,69 @@ autoStartModal?.addEventListener('click', (event) => {
 });
 btnAutoStartClose?.addEventListener('click', () => resolveModalChoice(null));
 
+async function startAutoRunFromCurrentSettings() {
+  const totalRuns = getRunCountValue();
+  let mode = 'restart';
+  const autoRunSkipFailures = inputAutoSkipFailures.checked;
+  const contributionNickname = String(inputContributionNickname?.value || '').trim();
+  const contributionQq = String(inputContributionQq?.value || '').trim();
+  const fallbackThreadIntervalMinutes = normalizeAutoRunThreadIntervalMinutes(
+    inputAutoSkipFailuresThreadIntervalMinutes.value
+  );
+  inputAutoSkipFailuresThreadIntervalMinutes.value = String(fallbackThreadIntervalMinutes);
+
+  if (shouldOfferAutoModeChoice()) {
+    const startStep = getFirstUnfinishedStep();
+    const runningStep = getRunningSteps()[0] ?? null;
+    const choice = await openAutoStartChoiceDialog(startStep, { runningStep });
+    if (!choice) {
+      return false;
+    }
+    mode = choice;
+  }
+
+  if (shouldWarnAutoRunFallbackRisk(totalRuns, autoRunSkipFailures)
+    && !isAutoRunFallbackRiskPromptDismissed()) {
+    const result = await openAutoRunFallbackRiskConfirmModal(totalRuns, fallbackThreadIntervalMinutes);
+    if (!result.confirmed) {
+      return false;
+    }
+    if (result.dismissPrompt) {
+      setAutoRunFallbackRiskPromptDismissed(true);
+    }
+  }
+
+  btnAutoRun.disabled = true;
+  inputRunCount.disabled = true;
+  const delayEnabled = inputAutoDelayEnabled.checked;
+  const delayMinutes = normalizeAutoDelayMinutes(inputAutoDelayMinutes.value);
+  inputAutoDelayMinutes.value = String(delayMinutes);
+  btnAutoRun.innerHTML = delayEnabled
+    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> 璁″垝涓?..'
+    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> 杩愯涓?..';
+  const response = await chrome.runtime.sendMessage({
+    type: delayEnabled ? 'SCHEDULE_AUTO_RUN' : 'AUTO_RUN',
+    source: 'sidepanel',
+    payload: {
+      totalRuns,
+      delayMinutes,
+      autoRunSkipFailures,
+      contributionMode: Boolean(latestState?.contributionMode),
+      contributionNickname,
+      contributionQq,
+      mode,
+    },
+  });
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+  return true;
+}
+
 // Auto Run
 btnAutoRun.addEventListener('click', async () => {
   try {
+    return await startAutoRunFromCurrentSettings();
     const totalRuns = getRunCountValue();
     let mode = 'restart';
     const autoRunSkipFailures = inputAutoSkipFailures.checked;
@@ -3812,6 +4007,14 @@ inputSub2ApiGroup.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputSub2ApiDefaultProxy.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputSub2ApiDefaultProxy.addEventListener('blur', () => {
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 inputEmailPrefix.addEventListener('input', () => {
   maybeClearGeneratedAliasAfterEmailPrefixChange().catch(() => { });
   syncManagedAliasBaseEmailDraftFromInput();
@@ -3992,6 +4195,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return true;
     }
 
+    case 'SECURITY_BLOCKED_ALERT': {
+      openConfirmModal({
+        title: message.payload?.title || '流程已完全停止',
+        message: message.payload?.message || '检测到安全风控，当前流程已完全停止。',
+        alert: message.payload?.alert || { text: '检测到 Cloudflare 风控，请暂停当前操作。', tone: 'danger' },
+        confirmLabel: '我知道了',
+        confirmVariant: 'btn-danger',
+      }).catch(() => {});
+      break;
+    }
+
     case 'LOG_ENTRY':
       appendLog(message.payload);
       if (message.payload.level === 'error') {
@@ -4075,14 +4289,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.payload.email !== undefined) {
         inputEmail.value = message.payload.email || '';
       }
-      if (message.payload.password !== undefined) {
-        inputPassword.value = message.payload.password || '';
+      if (
+        message.payload.password !== undefined
+        || message.payload.customPassword !== undefined
+        || message.payload.contributionMode !== undefined
+      ) {
+        syncPasswordField(latestState || {});
       }
       if (message.payload.localCpaStep9Mode !== undefined) {
         setLocalCpaStep9Mode(message.payload.localCpaStep9Mode);
       }
-      if (message.payload.cpaCallbackMode !== undefined) {
-        setCpaCallbackMode(message.payload.cpaCallbackMode);
+      if (message.payload.panelMode !== undefined) {
+        selectPanelMode.value = message.payload.panelMode || 'cpa';
+        updatePanelModeUI();
       }
       if (message.payload.oauthUrl !== undefined) {
         displayOauthUrl.textContent = message.payload.oauthUrl || '等待中...';
@@ -4186,6 +4405,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           )
         );
       }
+      renderContributionMode();
       break;
     }
 
@@ -4275,7 +4495,6 @@ initHotmailListExpandedState();
 updateSaveButtonState();
 updateConfigMenuControls();
 setLocalCpaStep9Mode(DEFAULT_LOCAL_CPA_STEP9_MODE);
-setCpaCallbackMode(DEFAULT_CPA_CALLBACK_MODE);
 setMail2925Mode(DEFAULT_MAIL_2925_MODE);
 initializeReleaseInfo().catch((err) => {
   console.error('Failed to initialize release info:', err);

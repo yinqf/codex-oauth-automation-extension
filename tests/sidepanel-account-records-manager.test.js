@@ -48,28 +48,84 @@ function extractFunction(name) {
   return sidepanelSource.slice(start, end);
 }
 
-function createButton() {
+function createClassList() {
+  const classNames = new Set();
   return {
-    disabled: false,
-    textContent: '',
-    hidden: false,
-    listeners: {},
-    addEventListener(type, handler) {
-      this.listeners[type] = handler;
+    add(...values) {
+      values.forEach((value) => classNames.add(String(value)));
+    },
+    remove(...values) {
+      values.forEach((value) => classNames.delete(String(value)));
+    },
+    toggle(value, force) {
+      const key = String(value);
+      if (force === undefined) {
+        if (classNames.has(key)) {
+          classNames.delete(key);
+          return false;
+        }
+        classNames.add(key);
+        return true;
+      }
+      if (force) {
+        classNames.add(key);
+        return true;
+      }
+      classNames.delete(key);
+      return false;
+    },
+    contains(value) {
+      return classNames.has(String(value));
+    },
+    toString() {
+      return Array.from(classNames).join(' ');
     },
   };
 }
 
-function createContainer() {
+function createNode(initial = {}) {
   return {
     innerHTML: '',
     textContent: '',
-    hidden: true,
+    hidden: false,
+    disabled: false,
     listeners: {},
+    attributes: {},
+    dataset: {},
+    classList: createClassList(),
     addEventListener(type, handler) {
       this.listeners[type] = handler;
     },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+    getAttribute(name) {
+      return this.attributes[name];
+    },
+    ...initial,
   };
+}
+
+function createClosestTarget(matches = {}, checked) {
+  return {
+    checked,
+    closest(selector) {
+      return matches[selector] || null;
+    },
+  };
+}
+
+function createDataNode(attrName, attrValue) {
+  return {
+    dataset: {},
+    getAttribute(name) {
+      return name === attrName ? attrValue : '';
+    },
+  };
+}
+
+async function flushPromises() {
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
 test('sidepanel html contains account records overlay and manager script', () => {
@@ -82,9 +138,22 @@ test('sidepanel html contains account records overlay and manager script', () =>
   assert.match(html, /id="account-records-list"/);
   assert.match(html, /id="account-records-stats"/);
   assert.match(html, /id="btn-clear-account-records"/);
+  assert.match(html, /id="btn-toggle-account-records-selection"/);
+  assert.match(html, /id="btn-delete-selected-account-records"/);
+  assert.match(html, /id="input-sub2api-default-proxy"/);
   assert.notEqual(managerIndex, -1);
   assert.notEqual(sidepanelIndex, -1);
   assert.ok(managerIndex < sidepanelIndex);
+});
+
+test('sidepanel css keeps confirm modal above account records overlay', () => {
+  const css = fs.readFileSync('sidepanel/sidepanel.css', 'utf8');
+  const overlayMatch = css.match(/\.account-records-overlay\s*\{[\s\S]*?z-index:\s*(\d+);/);
+  const modalMatch = css.match(/\.modal-overlay\s*\{[\s\S]*?z-index:\s*(\d+);/);
+
+  assert.ok(overlayMatch, 'missing account records overlay z-index');
+  assert.ok(modalMatch, 'missing modal overlay z-index');
+  assert.ok(Number(modalMatch[1]) > Number(overlayMatch[1]));
 });
 
 test('sidepanel account records helper normalizes snapshot helper base url', () => {
@@ -104,48 +173,71 @@ return { normalizeAccountRunHistoryHelperBaseUrlValue };
   );
 });
 
-test('account records manager exposes a factory and renders summarized paginated records', () => {
+test('account records manager supports filter chips and partial multi-select delete', async () => {
   const source = fs.readFileSync('sidepanel/account-records-manager.js', 'utf8');
   const windowObject = {};
-
   const api = new Function('window', `${source}; return window.SidepanelAccountRecordsManager;`)(windowObject);
 
   assert.equal(typeof api?.createAccountRecordsManager, 'function');
 
-  const btnOpenAccountRecords = createButton();
-  const btnCloseAccountRecords = createButton();
-  const btnClearAccountRecords = createButton();
-  const btnAccountRecordsPrev = createButton();
-  const btnAccountRecordsNext = createButton();
-  const overlay = createContainer();
-  const list = createContainer();
-  const stats = createContainer();
-  const meta = createContainer();
-  const pageLabel = createContainer();
+  let latestState = {
+    accountRunHistory: [
+      {
+        recordId: 'success@example.com',
+        email: 'success@example.com',
+        password: 'secret',
+        finalStatus: 'success',
+        finishedAt: '2026-04-17T04:31:00.000Z',
+        retryCount: 0,
+        failureLabel: '流程完成',
+      },
+      {
+        recordId: 'failed@example.com',
+        email: 'failed@example.com',
+        password: 'secret',
+        finalStatus: 'failed',
+        finishedAt: '2026-04-17T04:29:00.000Z',
+        retryCount: 2,
+        failureLabel: '出现手机号验证',
+      },
+      {
+        recordId: 'stopped@example.com',
+        email: 'stopped@example.com',
+        password: 'secret',
+        finalStatus: 'stopped',
+        finishedAt: '2026-04-17T04:28:00.000Z',
+        retryCount: 1,
+        failureLabel: '步骤 7 停止',
+      },
+    ],
+  };
 
-  const manager = api.createAccountRecordsManager({
+  const btnOpenAccountRecords = createNode();
+  const btnCloseAccountRecords = createNode();
+  const btnClearAccountRecords = createNode();
+  const btnToggleAccountRecordsSelection = createNode();
+  const btnDeleteSelectedAccountRecords = createNode({ hidden: true, disabled: true });
+  const btnAccountRecordsPrev = createNode();
+  const btnAccountRecordsNext = createNode();
+  const overlay = createNode();
+  const list = createNode();
+  const stats = createNode();
+  const meta = createNode();
+  const pageLabel = createNode();
+  const messages = [];
+  const toasts = [];
+  let manager = null;
+
+  manager = api.createAccountRecordsManager({
     state: {
-      getLatestState: () => ({
-        accountRunHistory: [
-          {
-            email: 'success@example.com',
-            password: 'secret',
-            finalStatus: 'success',
-            finishedAt: '2026-04-17T04:31:00.000Z',
-            retryCount: 0,
-            failureLabel: '流程完成',
-          },
-          {
-            email: 'failed@example.com',
-            password: 'secret',
-            finalStatus: 'failed',
-            finishedAt: '2026-04-17T04:29:00.000Z',
-            retryCount: 2,
-            failureLabel: '出现手机号验证',
-          },
-        ],
-      }),
-      syncLatestState() {},
+      getLatestState: () => latestState,
+      syncLatestState(nextState) {
+        latestState = {
+          ...latestState,
+          ...(nextState || {}),
+        };
+        manager.render(latestState);
+      },
     },
     dom: {
       accountRecordsList: list,
@@ -157,15 +249,33 @@ test('account records manager exposes a factory and renders summarized paginated
       btnAccountRecordsPrev,
       btnClearAccountRecords,
       btnCloseAccountRecords,
+      btnDeleteSelectedAccountRecords,
       btnOpenAccountRecords,
+      btnToggleAccountRecordsSelection,
     },
     helpers: {
       escapeHtml: (value) => String(value || ''),
       openConfirmModal: async () => true,
-      showToast() {},
+      showToast(message, tone) {
+        toasts.push({ message, tone });
+      },
     },
     runtime: {
-      sendMessage: async () => ({ clearedCount: 2 }),
+      sendMessage: async (message) => {
+        messages.push(message);
+        if (message.type === 'DELETE_ACCOUNT_RUN_HISTORY_RECORDS') {
+          return {
+            deletedCount: message.payload.recordIds.length,
+            remainingCount: 2,
+          };
+        }
+        if (message.type === 'CLEAR_ACCOUNT_RUN_HISTORY') {
+          return {
+            clearedCount: latestState.accountRunHistory.length,
+          };
+        }
+        return {};
+      },
     },
     constants: {
       displayTimeZone: 'Asia/Shanghai',
@@ -173,18 +283,60 @@ test('account records manager exposes a factory and renders summarized paginated
     },
   });
 
-  assert.equal(typeof manager.bindEvents, 'function');
-  assert.equal(typeof manager.render, 'function');
-  assert.equal(typeof manager.openPanel, 'function');
-
   manager.bindEvents();
   manager.render();
 
-  assert.match(meta.textContent, /共 2 条/);
-  assert.match(stats.innerHTML, /重试/);
+  assert.match(meta.textContent, /共 3 条/);
+  assert.match(stats.innerHTML, /data-account-record-filter="retry"/);
   assert.match(list.innerHTML, /success@example\.com/);
-  assert.match(list.innerHTML, /出现手机号验证/);
-  assert.match(list.innerHTML, /重试 2/);
+  assert.match(list.innerHTML, /failed@example\.com/);
   assert.equal(pageLabel.textContent, '1 / 1');
-  assert.equal(btnClearAccountRecords.disabled, false);
+  assert.equal(btnDeleteSelectedAccountRecords.hidden, true);
+
+  stats.listeners.click({
+    target: createClosestTarget({
+      '[data-account-record-filter]': createDataNode('data-account-record-filter', 'retry'),
+    }),
+  });
+
+  assert.match(meta.textContent, /当前筛选 重试 2 条/);
+  assert.doesNotMatch(list.innerHTML, /success@example\.com/);
+  assert.match(list.innerHTML, /failed@example\.com/);
+  assert.match(list.innerHTML, /stopped@example\.com/);
+  assert.match(list.innerHTML, /步骤 7 停止/);
+
+  btnToggleAccountRecordsSelection.listeners.click();
+
+  assert.equal(btnDeleteSelectedAccountRecords.hidden, false);
+  assert.equal(btnClearAccountRecords.hidden, true);
+  assert.equal(btnDeleteSelectedAccountRecords.disabled, true);
+  assert.equal(btnToggleAccountRecordsSelection.textContent, '取消多选');
+
+  list.listeners.click({
+    target: createClosestTarget({
+      '[data-account-record-toggle]': null,
+      '[data-account-record-id]': createDataNode('data-account-record-id', 'failed@example.com'),
+    }),
+  });
+
+  assert.equal(btnDeleteSelectedAccountRecords.disabled, false);
+  assert.match(btnDeleteSelectedAccountRecords.textContent, /删除选中\(1\)/);
+  assert.match(list.innerHTML, /data-account-record-checkbox="failed@example\.com"[^>]*checked/);
+
+  await btnDeleteSelectedAccountRecords.listeners.click();
+  await flushPromises();
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, 'DELETE_ACCOUNT_RUN_HISTORY_RECORDS');
+  assert.deepStrictEqual(messages[0].payload.recordIds, ['failed@example.com']);
+  assert.equal(latestState.accountRunHistory.length, 2);
+  assert.equal(latestState.accountRunHistory.some((item) => item.email === 'failed@example.com'), false);
+  assert.match(meta.textContent, /当前筛选 重试 1 条/);
+  assert.doesNotMatch(list.innerHTML, /failed@example\.com/);
+  assert.match(list.innerHTML, /stopped@example\.com/);
+  assert.equal(btnDeleteSelectedAccountRecords.disabled, true);
+  assert.deepStrictEqual(toasts.at(-1), {
+    message: '已删除 1 条邮箱记录。',
+    tone: 'success',
+  });
 });

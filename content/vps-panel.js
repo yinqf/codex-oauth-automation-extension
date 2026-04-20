@@ -1,4 +1,4 @@
-// content/vps-panel.js — Content script for CPA panel (steps 1, 9)
+// content/vps-panel.js — Content script for CPA panel (steps 7, 10 / OAuth URL request)
 // Injected on: CPA panel (user-configured URL)
 //
 // Actual DOM structure (after login click):

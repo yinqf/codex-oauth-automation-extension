@@ -4,7 +4,6 @@
   function createNavigationUtils(deps = {}) {
     const {
       DEFAULT_SUB2API_URL,
-      normalizeCpaCallbackMode,
       normalizeLocalCpaStep9Mode,
     } = deps;
 
@@ -92,7 +91,7 @@
 
     function shouldSkipLoginVerificationForCpaCallback(state) {
       return getPanelMode(state) === 'cpa'
-        && normalizeCpaCallbackMode(state?.cpaCallbackMode) === 'step7';
+        && String(state?.cpaCallbackMode || '').trim().toLowerCase() === 'step7';
     }
 
     function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {

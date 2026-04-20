@@ -52,10 +52,14 @@ function extractFunction(source, name) {
 }
 
 const helperBundle = [
+  extractFunction(helperSource, 'normalizeAutoRunSessionId'),
+  extractFunction(helperSource, 'clearCurrentAutoRunSessionId'),
   extractFunction(helperSource, 'throwIfStopped'),
   extractFunction(helperSource, 'cleanupStep8NavigationListeners'),
   extractFunction(helperSource, 'rejectPendingStep8'),
   extractFunction(helperSource, 'throwIfStep8SettledOrStopped'),
+  extractFunction(helperSource, 'getRunningSteps'),
+  extractFunction(helperSource, 'inferStoppedRecordStep'),
   extractFunction(helperSource, 'requestStop'),
 ].join('\n');
 
@@ -71,7 +75,11 @@ let autoRunActive = true;
 let autoRunCurrentRun = 2;
 let autoRunTotalRuns = 3;
 let autoRunAttemptRun = 4;
+let autoRunSessionId = 99;
 const AUTO_RUN_TIMER_KIND_SCHEDULED_START = 'scheduled_start';
+const DEFAULT_STATE = {
+  stepStatuses: Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((step) => [step, 'pending'])),
+};
 const STEP8_CLICK_RETRY_DELAY_MS = 500;
 const STEP8_MAX_ROUNDS = 5;
 const STEP8_READY_WAIT_TIMEOUT_MS = 30000;
@@ -134,6 +142,7 @@ async function addLog() {}
 async function broadcastStopToContentScripts() {}
 async function markRunningStepsStopped() {}
 async function broadcastAutoRunStatus() {}
+async function appendAndBroadcastAccountRunRecord() {}
 async function getState() {
   return { autoRunning: false };
 }
@@ -257,6 +266,7 @@ return {
       sentMessages,
       clickCount,
       autoRunActive,
+      autoRunSessionId,
     };
   },
 };
@@ -288,6 +298,7 @@ return {
   assert.strictEqual(state.webNavCommittedListener, null, 'Stop 后 onCommitted 引用应为空');
   assert.strictEqual(state.step8TabUpdatedListener, null, 'Stop 后 tabs.onUpdated 引用应为空');
   assert.strictEqual(state.step8PendingReject, null, 'Stop 后不应保留 Step 8 挂起 reject');
+  assert.strictEqual(state.autoRunSessionId, 0, 'Stop 后自动运行 session 应失效');
 
   console.log('step8 stop cleanup tests passed');
 })().catch((error) => {

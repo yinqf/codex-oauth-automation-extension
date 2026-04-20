@@ -62,6 +62,11 @@
       return /未在 .*邮箱中找到新的匹配邮件|未在 Hotmail 收件箱中找到新的匹配验证码|邮箱轮询结束，但未获取到验证码|无法获取新的(?:注册|登录)验证码|页面未能重新就绪|页面通信异常|did not respond in \d+s/i.test(message);
     }
 
+    function isAddPhoneAuthFailure(error) {
+      const message = getErrorMessage(error);
+      return /https:\/\/auth\.openai\.com\/add-phone(?:[/?#]|$)|\badd-phone\b|添加手机号|手机号码|手机号页|手机号页面|手机号|phone\s+number|telephone/i.test(message);
+    }
+
     function getLoginAuthStateLabel(state) {
       state = state === 'oauth_consent_page' ? 'unknown' : state;
       switch (state) {
@@ -85,6 +90,11 @@
     function isRestartCurrentAttemptError(error) {
       const message = String(typeof error === 'string' ? error : error?.message || '');
       return /当前邮箱已存在，需要重新开始新一轮/.test(message);
+    }
+
+    function isSignupUserAlreadyExistsFailure(error) {
+      const message = getErrorMessage(error);
+      return /SIGNUP_USER_ALREADY_EXISTS::|user_already_exists/i.test(message);
     }
 
     function isStep9RecoverableAuthError(error) {
@@ -138,6 +148,7 @@
         autoRunCurrentRun: payload.currentRun ?? 0,
         autoRunTotalRuns: payload.totalRuns ?? 1,
         autoRunAttemptRun: payload.attemptRun ?? 0,
+        autoRunSessionId: Math.max(0, Math.floor(Number(payload.sessionId ?? payload.autoRunSessionId) || 0)),
         scheduledAutoRunAt: Number.isFinite(Number(payload.scheduledAt)) ? Number(payload.scheduledAt) : null,
         autoRunCountdownAt: Number.isFinite(Number(payload.countdownAt)) ? Number(payload.countdownAt) : null,
         autoRunCountdownTitle: payload.countdownTitle === undefined ? '' : String(payload.countdownTitle || ''),
@@ -148,6 +159,7 @@
     return {
       addLog,
       getAutoRunStatusPayload,
+      isAddPhoneAuthFailure,
       getErrorMessage,
       getFirstUnfinishedStep,
       getLoginAuthStateLabel,
@@ -156,6 +168,7 @@
       hasSavedProgress,
       isLegacyStep9RecoverableAuthError,
       isRestartCurrentAttemptError,
+      isSignupUserAlreadyExistsFailure,
       isStep9RecoverableAuthError,
       isStepDoneStatus,
       isVerificationMailPollingError,

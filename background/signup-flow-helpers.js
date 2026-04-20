@@ -167,7 +167,11 @@
         type: 'PREPARE_SIGNUP_VERIFICATION',
         step,
         source: 'background',
-        payload: { password: password || '' },
+        payload: {
+          password: password || '',
+          prepareSource: 'step3_finalize',
+          prepareLogLabel: '步骤 3 收尾',
+        },
       }, {
         timeoutMs: 30000,
         retryDelayMs: 700,

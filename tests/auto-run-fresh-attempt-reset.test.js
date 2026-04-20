@@ -53,6 +53,7 @@ function extractFunction(source, name) {
 
 const helperBundle = [
   extractFunction(helperSource, 'clearStopRequest'),
+  extractFunction(helperSource, 'normalizeAutoRunSessionId'),
   extractFunction(helperSource, 'throwIfStopped'),
   extractFunction(helperSource, 'isStopError'),
   extractFunction(helperSource, 'isStepDoneStatus'),
@@ -88,6 +89,8 @@ const DEFAULT_STATE = {
 
 let stopRequested = false;
 let runCalls = 0;
+let autoRunSessionId = 0;
+let autoRunSessionSeed = 1000;
 
 const logs = [];
 const broadcasts = [];
@@ -191,6 +194,17 @@ async function persistAutoRunTimerPlan() {}
 async function launchAutoRunTimerPlan() { return false; }
 function getPendingAutoRunTimerPlan() { return null; }
 function getErrorMessage(error) { return error?.message || String(error || ''); }
+function createAutoRunSessionId() {
+  autoRunSessionSeed += 1;
+  autoRunSessionId = autoRunSessionSeed;
+  return autoRunSessionId;
+}
+function throwIfAutoRunSessionStopped(sessionId) {
+  if (sessionId && sessionId !== autoRunSessionId) {
+    throw new Error(STOP_ERROR_MESSAGE);
+  }
+  throwIfStopped();
+}
 const chrome = {
   runtime: {
     sendMessage() {
@@ -242,6 +256,7 @@ const runtime = {
     autoRunCurrentRun: 0,
     autoRunTotalRuns: 1,
     autoRunAttemptRun: 0,
+    autoRunSessionId: 0,
   },
   get() {
     return { ...this.state };
@@ -261,6 +276,7 @@ const controller = self.MultiPageBackgroundAutoRunController.createAutoRunContro
   broadcastStopToContentScripts,
   cancelPendingCommands,
   clearStopRequest,
+  createAutoRunSessionId,
   getAutoRunStatusPayload,
   getErrorMessage,
   getFirstUnfinishedStep,
@@ -279,6 +295,7 @@ const controller = self.MultiPageBackgroundAutoRunController.createAutoRunContro
   runtime,
   setState,
   sleepWithStop,
+  throwIfAutoRunSessionStopped,
   waitForRunningStepsToFinish,
   throwIfStopped,
   chrome,
@@ -309,6 +326,7 @@ return {
   assert.strictEqual(snapshot.currentState.autoRunPhase, 'complete', 'both runs should complete after reset');
   assert.strictEqual(snapshot.currentState.autoRunCurrentRun, 2, 'final run index should be recorded');
   assert.strictEqual(snapshot.autoRunActive, false, 'auto-run should exit active state after completion');
+  assert.strictEqual(snapshot.currentState.autoRunSessionId, 0, 'session id should be cleared after completion');
   assert.strictEqual(snapshot.currentState.gmailBaseEmail, 'demo@gmail.com', 'gmail base email should survive fresh-attempt reset');
   assert.strictEqual(snapshot.currentState.mail2925BaseEmail, 'demo@2925.com', '2925 base email should survive fresh-attempt reset');
 

@@ -4,6 +4,7 @@ importScripts(
   'managed-alias-utils.js',
   'background/account-run-history.js',
   'background/cpa-upload-flow.js',
+  'background/contribution-oauth.js',
   'background/panel-bridge.js',
   'background/generated-email-helpers.js',
   'background/signup-flow-helpers.js',
@@ -134,6 +135,8 @@ const MS_LQQQ_PROVIDER = 'ms-lqqq';
 const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
+const CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX = 'CF_SECURITY_BLOCKED::';
+const CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE = '您已触发Cloudflare 安全防护系统，已完全停止流程，请不要短时间内多次进行重新发送验证码，连续刷新、反复点击重试会加重风控；请先关闭页面等待 15-30 分钟，让系统的临时限制自动解除。或者更换浏览器';
 const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP6_MAX_ATTEMPTS = 3;
@@ -143,6 +146,7 @@ const SUB2API_STEP1_RESPONSE_TIMEOUT_MS = 90000;
 const SUB2API_STEP9_RESPONSE_TIMEOUT_MS = 120000;
 const DEFAULT_SUB2API_URL = 'https://sub2api.hisence.fun/admin/accounts';
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
+const DEFAULT_SUB2API_PROXY_NAME = '';
 const DEFAULT_SUB2API_REDIRECT_URI = 'http://localhost:1455/auth/callback';
 const AUTO_RUN_TIMER_ALARM_NAME = 'auto-run-timer';
 const AUTO_RUN_TIMER_KIND_SCHEDULED_START = 'scheduled_start';
@@ -160,7 +164,6 @@ const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
 const LEGACY_AUTO_STEP_DELAY_KEYS = ['autoStepRandomDelayMinSeconds', 'autoStepRandomDelayMaxSeconds'];
 const LEGACY_VERIFICATION_RESEND_COUNT_KEYS = ['signupVerificationResendCount', 'loginVerificationResendCount'];
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
-const DEFAULT_CPA_CALLBACK_MODE = 'step9';
 const MAIL_2925_MODE_PROVIDE = 'provide';
 const MAIL_2925_MODE_RECEIVE = 'receive';
 const DEFAULT_MAIL_2925_MODE = MAIL_2925_MODE_PROVIDE;
@@ -175,6 +178,25 @@ const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const MICROSOFT_TOKEN_DNR_RULE_ID = 1001;
 const PERSISTENT_ALIAS_STATE_KEYS = ['manualAliasUsage', 'preservedAliases'];
 const ACCOUNT_RUN_HISTORY_STORAGE_KEY = 'accountRunHistory';
+const CONTRIBUTION_RUNTIME_DEFAULTS = self.MultiPageBackgroundContributionOAuth?.RUNTIME_DEFAULTS || {
+  contributionMode: false,
+  contributionModeExpected: false,
+  contributionNickname: '',
+  contributionQq: '',
+  contributionSessionId: '',
+  contributionAuthUrl: '',
+  contributionAuthState: '',
+  contributionCallbackUrl: '',
+  contributionStatus: '',
+  contributionStatusMessage: '',
+  contributionLastPollAt: 0,
+  contributionCallbackStatus: 'idle',
+  contributionCallbackMessage: '',
+  contributionAuthOpenedAt: 0,
+  contributionAuthTabId: 0,
+};
+const CONTRIBUTION_RUNTIME_KEYS = self.MultiPageBackgroundContributionOAuth?.RUNTIME_KEYS
+  || Object.keys(CONTRIBUTION_RUNTIME_DEFAULTS);
 
 initializeSessionStorageAccess();
 setupDeclarativeNetRequestRules();
@@ -214,11 +236,11 @@ const PERSISTED_SETTING_DEFAULTS = {
   vpsUrl: '',
   vpsPassword: '',
   localCpaStep9Mode: DEFAULT_LOCAL_CPA_STEP9_MODE,
-  cpaCallbackMode: DEFAULT_CPA_CALLBACK_MODE,
   sub2apiUrl: DEFAULT_SUB2API_URL,
   sub2apiEmail: '',
   sub2apiPassword: '',
   sub2apiGroupName: DEFAULT_SUB2API_GROUP_NAME,
+  sub2apiDefaultProxyName: DEFAULT_SUB2API_PROXY_NAME,
   customPassword: '',
   autoRunSkipFailures: false,
   autoRunFallbackThreadIntervalMinutes: 0,
@@ -277,6 +299,7 @@ const PRE_LOGIN_COOKIE_CLEAR_ORIGINS = [
 const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
   stepStatuses: Object.fromEntries(STEP_IDS.map((stepId) => [stepId, 'pending'])),
+  ...CONTRIBUTION_RUNTIME_DEFAULTS,
   oauthUrl: null, // 运行时抓取到的 OAuth 地址，不要手动预填。
   email: null, // 运行时邮箱，由程序自动获取并写入，不能手动预填。
   password: null, // 运行时实际密码，由 customPassword 或程序自动生成后写入。
@@ -292,6 +315,7 @@ const DEFAULT_STATE = {
   sub2apiOAuthState: null, // SUB2API OpenAI Auth state。
   sub2apiGroupId: null, // SUB2API 目标分组 ID。
   sub2apiDraftName: null, // SUB2API 本轮预生成的账号名称。
+  sub2apiProxyId: null, // SUB2API 本轮使用的代理 ID。
   flowStartTime: null, // 当前流程开始时间。
   tabRegistry: {}, // 程序维护的标签页注册表。
   sourceLastUrls: {}, // 各来源页面最近一次打开的地址记录。
@@ -311,6 +335,7 @@ const DEFAULT_STATE = {
   autoRunCurrentRun: 0, // 自动运行当前执行到第几轮。
   autoRunTotalRuns: 1, // 自动运行计划总轮数。
   autoRunAttemptRun: 0, // 当前轮次的重试序号。
+  autoRunSessionId: 0,
   autoRunRoundSummaries: [], // 自动运行轮次摘要。
   scheduledAutoRunAt: null, // 自动运行计划启动时间戳。
   autoRunTimerPlan: null, // 自动运行可恢复计时计划快照。
@@ -321,6 +346,7 @@ const DEFAULT_STATE = {
   loginVerificationRequestedAt: null,
   oauthConsentReady: false,
   oauthFlowDeadlineAt: null,
+  oauthFlowDeadlineSourceUrl: null,
   currentHotmailAccountId: null,
   cpaUploadRunning: false,
   cpaUploadCurrentLine: null,
@@ -435,6 +461,48 @@ function normalizeAutoRunTimerKind(value = '') {
   return '';
 }
 
+function normalizeAutoRunSessionId(value) {
+  const numeric = Math.floor(Number(value) || 0);
+  return numeric > 0 ? numeric : 0;
+}
+
+function createAutoRunSessionId() {
+  autoRunSessionSeed = Math.max(autoRunSessionSeed + 1, Date.now());
+  autoRunSessionId = autoRunSessionSeed;
+  return autoRunSessionId;
+}
+
+function setCurrentAutoRunSessionId(value) {
+  autoRunSessionId = normalizeAutoRunSessionId(value);
+  return autoRunSessionId;
+}
+
+function clearCurrentAutoRunSessionId(expectedSessionId = null) {
+  if (expectedSessionId === null) {
+    autoRunSessionId = 0;
+    return autoRunSessionId;
+  }
+
+  const normalizedExpected = normalizeAutoRunSessionId(expectedSessionId);
+  if (!normalizedExpected || normalizedExpected === autoRunSessionId) {
+    autoRunSessionId = 0;
+  }
+  return autoRunSessionId;
+}
+
+function isCurrentAutoRunSessionId(value) {
+  const normalized = normalizeAutoRunSessionId(value);
+  return normalized > 0 && normalized === autoRunSessionId;
+}
+
+function throwIfAutoRunSessionStopped(sessionId) {
+  const normalizedSessionId = normalizeAutoRunSessionId(sessionId);
+  if (normalizedSessionId && !isCurrentAutoRunSessionId(normalizedSessionId)) {
+    throw new Error(STOP_ERROR_MESSAGE);
+  }
+  throwIfStopped();
+}
+
 function normalizeAutoRunTimerPlan(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) {
     return null;
@@ -458,6 +526,7 @@ function normalizeAutoRunTimerPlan(plan) {
     0,
     Math.min(AUTO_RUN_MAX_RETRIES_PER_ROUND + 1, Math.floor(Number(plan.attemptRun) || 0))
   );
+  const autoRunSessionId = normalizeAutoRunSessionId(plan.autoRunSessionId ?? plan.sessionId);
   const roundSummaries = serializeAutoRunRoundSummaries(totalRuns, plan.roundSummaries);
   const countdownTitle = String(plan.countdownTitle || '').trim();
   const countdownNote = String(plan.countdownNote || '').trim();
@@ -471,6 +540,7 @@ function normalizeAutoRunTimerPlan(plan) {
       mode,
       currentRun: 0,
       attemptRun: 0,
+      autoRunSessionId,
       roundSummaries: [],
       countdownTitle: countdownTitle || '已计划自动运行',
       countdownNote: countdownNote || `计划于 ${formatAutoRunScheduleTime(fireAt)} 开始`,
@@ -488,6 +558,7 @@ function normalizeAutoRunTimerPlan(plan) {
       mode: 'restart',
       currentRun: normalizedCurrentRun,
       attemptRun: normalizedAttemptRun,
+      autoRunSessionId,
       roundSummaries,
       countdownTitle: countdownTitle || '线程间隔中',
       countdownNote: countdownNote || `第 ${Math.min(normalizedCurrentRun + 1, totalRuns)}/${totalRuns} 轮即将开始`,
@@ -504,6 +575,7 @@ function normalizeAutoRunTimerPlan(plan) {
     mode: 'restart',
     currentRun: normalizedCurrentRun,
     attemptRun: normalizedAttemptRun,
+    autoRunSessionId,
     roundSummaries,
     countdownTitle: countdownTitle || '线程间隔中',
     countdownNote: countdownNote || `第 ${normalizedCurrentRun}/${totalRuns} 轮第 ${normalizedAttemptRun} 次尝试即将开始`,
@@ -530,6 +602,7 @@ function normalizeAutoRunTimerPlanFromState(state = {}) {
     fireAt: legacyScheduledAt,
     totalRuns: state.scheduledAutoRunPlan?.totalRuns ?? state.autoRunTotalRuns,
     autoRunSkipFailures: state.scheduledAutoRunPlan?.autoRunSkipFailures ?? state.autoRunSkipFailures,
+    autoRunSessionId: state.autoRunSessionId,
     mode: state.scheduledAutoRunPlan?.mode,
   });
 }
@@ -550,6 +623,7 @@ function getAutoRunTimerStatusPayload(plan) {
     currentRun: normalizedPlan.currentRun,
     totalRuns: normalizedPlan.totalRuns,
     attemptRun: normalizedPlan.attemptRun,
+    sessionId: normalizedPlan.autoRunSessionId,
     scheduledAt: phase === 'scheduled' ? normalizedPlan.fireAt : null,
     countdownAt: normalizedPlan.fireAt,
     countdownTitle: normalizedPlan.countdownTitle,
@@ -646,17 +720,6 @@ function normalizeLocalCpaStep9Mode(value = '') {
   return String(value || '').trim().toLowerCase() === 'bypass'
     ? 'bypass'
     : DEFAULT_LOCAL_CPA_STEP9_MODE;
-}
-
-function normalizeCpaCallbackMode(value = '') {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'step7' || normalized === 'step6') {
-    return 'step7';
-  }
-  if (normalized === 'step9' || normalized === 'step8') {
-    return 'step9';
-  }
-  return DEFAULT_CPA_CALLBACK_MODE;
 }
 
 function normalizeCloudflareDomain(rawValue = '') {
@@ -793,8 +856,6 @@ function normalizePersistentSettingValue(key, value) {
       return String(value || '');
     case 'localCpaStep9Mode':
       return normalizeLocalCpaStep9Mode(value);
-    case 'cpaCallbackMode':
-      return normalizeCpaCallbackMode(value);
     case 'sub2apiUrl':
       return String(value || '').trim();
     case 'sub2apiEmail':
@@ -802,6 +863,8 @@ function normalizePersistentSettingValue(key, value) {
     case 'sub2apiPassword':
       return String(value || '');
     case 'sub2apiGroupName':
+      return String(value || '').trim();
+    case 'sub2apiDefaultProxyName':
       return String(value || '').trim();
     case 'customPassword':
       return String(value || '');
@@ -1075,6 +1138,7 @@ async function setEmailStateSilently(email) {
 async function setEmailState(email) {
   await setEmailStateSilently(email);
   if (email) {
+    await appendManualAccountRunRecordIfNeeded('step2_stopped', null, '步骤 2 已使用邮箱，流程尚未完成。');
     await resumeAutoRunIfWaitingForEmail();
   }
 }
@@ -1082,6 +1146,67 @@ async function setEmailState(email) {
 async function setPasswordState(password) {
   await setState({ password });
   broadcastDataUpdate({ password });
+}
+
+function buildContributionModeState(enabled, persistedSettings = {}, currentState = {}) {
+  const currentContributionState = {};
+  for (const key of CONTRIBUTION_RUNTIME_KEYS) {
+    currentContributionState[key] = currentState[key] !== undefined
+      ? currentState[key]
+      : CONTRIBUTION_RUNTIME_DEFAULTS[key];
+  }
+
+  if (enabled) {
+    return {
+      ...currentContributionState,
+      contributionMode: true,
+      contributionModeExpected: true,
+      panelMode: 'cpa',
+      customPassword: '',
+      accountRunHistoryTextEnabled: false,
+    };
+  }
+
+  return {
+    ...CONTRIBUTION_RUNTIME_DEFAULTS,
+    contributionMode: false,
+    contributionModeExpected: false,
+    panelMode: persistedSettings.panelMode || DEFAULT_STATE.panelMode,
+    customPassword: persistedSettings.customPassword || '',
+    accountRunHistoryTextEnabled: Boolean(persistedSettings.accountRunHistoryTextEnabled),
+  };
+}
+
+async function setContributionMode(enabled) {
+  const normalizedEnabled = Boolean(enabled);
+  const [persistedSettings, currentState] = await Promise.all([
+    getPersistedSettings(),
+    getState(),
+  ]);
+
+  if (normalizedEnabled) {
+    await setPersistentSettings({ panelMode: 'cpa' });
+  }
+
+  const updates = buildContributionModeState(normalizedEnabled, {
+    ...persistedSettings,
+    ...(normalizedEnabled ? { panelMode: 'cpa' } : {}),
+  }, currentState);
+
+  await setState(updates);
+  const nextState = await getState();
+  const contributionBroadcast = {};
+  for (const key of CONTRIBUTION_RUNTIME_KEYS) {
+    contributionBroadcast[key] = nextState[key];
+  }
+  broadcastDataUpdate({
+    ...contributionBroadcast,
+    panelMode: nextState.panelMode,
+    customPassword: nextState.customPassword,
+    accountRunHistoryTextEnabled: nextState.accountRunHistoryTextEnabled,
+    accountRunHistoryHelperBaseUrl: nextState.accountRunHistoryHelperBaseUrl,
+  });
+  return nextState;
 }
 
 function getLuckmailUsedPurchases(state = {}) {
@@ -1234,15 +1359,21 @@ async function resetState() {
       'luckmailPreserveTagId',
       'luckmailPreserveTagName',
       'preferredIcloudHost',
+      ...CONTRIBUTION_RUNTIME_KEYS,
     ]),
     getPersistedSettings(),
     getPersistedAliasState(),
   ]);
+  const contributionModeState = buildContributionModeState(Boolean(prev.contributionMode), {
+    ...persistedSettings,
+    ...(prev.contributionMode ? { panelMode: 'cpa' } : {}),
+  }, prev);
   await chrome.storage.session.clear();
   await chrome.storage.session.set({
     ...DEFAULT_STATE,
     ...persistedSettings,
     ...persistedAliasState,
+    ...contributionModeState,
     seenCodes: prev.seenCodes || [],
     seenInbucketMailIds: prev.seenInbucketMailIds || [],
     accounts: prev.accounts || [],
@@ -3549,7 +3680,7 @@ function shouldSkipLoginVerificationForCpaCallback(state) {
     return navigationUtils.shouldSkipLoginVerificationForCpaCallback(state);
   }
   return getPanelMode(state) === 'cpa'
-    && normalizeCpaCallbackMode(state?.cpaCallbackMode) === 'step7';
+    && String(state?.cpaCallbackMode || '').trim().toLowerCase() === 'step7';
 }
 
 function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
@@ -3781,7 +3912,6 @@ function isRetryableContentScriptTransportError(error) {
 
 const navigationUtils = self.MultiPageBackgroundNavigationUtils?.createNavigationUtils({
   DEFAULT_SUB2API_URL,
-  normalizeCpaCallbackMode,
   normalizeLocalCpaStep9Mode,
 });
 
@@ -3805,6 +3935,7 @@ const tabRuntime = self.MultiPageBackgroundTabRuntime?.createTabRuntime({
   LOG_PREFIX,
   matchesSourceUrlFamily,
   setState,
+  sleepWithStop,
   STOP_ERROR_MESSAGE,
   throwIfStopped,
 });
@@ -3816,12 +3947,71 @@ function getErrorMessage(error) {
   return String(typeof error === 'string' ? error : error?.message || '');
 }
 
+function isCloudflareSecurityBlockedError(error) {
+  return getErrorMessage(error).startsWith(CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX);
+}
+
+function isTerminalSecurityBlockedError(error) {
+  return isCloudflareSecurityBlockedError(error);
+}
+
+function getCloudflareSecurityBlockedMessage(error) {
+  const message = getErrorMessage(error);
+  if (message.startsWith(CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX)) {
+    return message.slice(CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX.length).trim() || CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE;
+  }
+  return CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE;
+}
+
+function getTerminalSecurityBlockedMessage(error) {
+  return getCloudflareSecurityBlockedMessage(error);
+}
+
+function getTerminalSecurityBlockedAlertText(error) {
+  return '检测到 Cloudflare 风控，请暂停当前操作。';
+}
+
+function getTerminalSecurityBlockedTitle(error) {
+  return 'Cloudflare 风控拦截';
+}
+
+function broadcastSecurityBlockedAlert(title = '流程已完全停止', message = CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE, alertText = '检测到 Cloudflare 风控，请暂停当前操作。') {
+  chrome.runtime.sendMessage({
+    type: 'SECURITY_BLOCKED_ALERT',
+    payload: {
+      title,
+      message,
+      alert: {
+        text: alertText,
+        tone: 'danger',
+      },
+    },
+  }).catch(() => { });
+}
+
+async function handleCloudflareSecurityBlocked(error) {
+  const title = getTerminalSecurityBlockedTitle(error);
+  const message = getTerminalSecurityBlockedMessage(error);
+  const alertText = getTerminalSecurityBlockedAlertText(error);
+  await requestStop({ logMessage: message });
+  broadcastSecurityBlockedAlert(title, message, alertText);
+  return message;
+}
+
 function isVerificationMailPollingError(error) {
   if (typeof loggingStatus !== 'undefined' && loggingStatus?.isVerificationMailPollingError) {
     return loggingStatus.isVerificationMailPollingError(error);
   }
   const message = getErrorMessage(error);
   return /未在 .*邮箱中找到新的匹配邮件|未在 Hotmail 收件箱中找到新的匹配验证码|邮箱轮询结束，但未获取到验证码|无法获取新的(?:注册|登录)验证码|页面未能重新就绪|页面通信异常|did not respond in \d+s/i.test(message);
+}
+
+function isAddPhoneAuthFailure(error) {
+  if (typeof loggingStatus !== 'undefined' && loggingStatus?.isAddPhoneAuthFailure) {
+    return loggingStatus.isAddPhoneAuthFailure(error);
+  }
+  const message = getErrorMessage(error);
+  return /https:\/\/auth\.openai\.com\/add-phone(?:[/?#]|$)|\badd-phone\b|添加手机号|手机号码|手机号页|手机号页面|手机号|phone\s+number|telephone/i.test(message);
 }
 
 function getLoginAuthStateLabel(state) {
@@ -3846,6 +4036,14 @@ function isRestartCurrentAttemptError(error) {
   }
   const message = String(typeof error === 'string' ? error : error?.message || '');
   return /当前邮箱已存在，需要重新开始新一轮/.test(message);
+}
+
+function isSignupUserAlreadyExistsFailure(error) {
+  if (typeof loggingStatus !== 'undefined' && loggingStatus?.isSignupUserAlreadyExistsFailure) {
+    return loggingStatus.isSignupUserAlreadyExistsFailure(error);
+  }
+  const message = getErrorMessage(error);
+  return /SIGNUP_USER_ALREADY_EXISTS::|user_already_exists/i.test(message);
 }
 
 function isStep9RecoverableAuthError(error) {
@@ -3894,6 +4092,7 @@ function getDownstreamStateResets(step) {
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -3906,6 +4105,7 @@ function getDownstreamStateResets(step) {
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -3917,6 +4117,7 @@ function getDownstreamStateResets(step) {
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -3927,6 +4128,7 @@ function getDownstreamStateResets(step) {
       lastLoginCode: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       localhostUrl: null,
     };
   }
@@ -3983,12 +4185,86 @@ function getRunningSteps(statuses = {}) {
     .sort((a, b) => a - b);
 }
 
+function inferStoppedRecordStep(state = {}) {
+  const statuses = { ...DEFAULT_STATE.stepStatuses, ...(state?.stepStatuses || {}) };
+  const stepIds = Object.keys(statuses)
+    .map((step) => Number(step))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+
+  const runningSteps = stepIds.filter((step) => statuses[step] === 'running');
+  if (runningSteps.length) {
+    return runningSteps[0];
+  }
+
+  const hasProgress = stepIds.some((step) => statuses[step] !== 'pending');
+  if (!hasProgress) {
+    return null;
+  }
+
+  for (const step of stepIds) {
+    const status = statuses[step] || 'pending';
+    if (!(status === 'completed' || status === 'manual_completed' || status === 'skipped')) {
+      return step;
+    }
+  }
+
+  return null;
+}
+
+function resolveAccountRunRecordStatusForStop(status, state = {}) {
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  if (normalizedStatus === 'stopped') {
+    const inferredStep = inferStoppedRecordStep(state);
+    if (Number.isInteger(inferredStep) && inferredStep > 0) {
+      return `step${inferredStep}_stopped`;
+    }
+  }
+  return status;
+}
+
+function extractStoppedStepFromRecordStatus(status = '') {
+  const match = String(status || '').trim().toLowerCase().match(/^step(\d+)_stopped$/);
+  if (!match) {
+    return null;
+  }
+  const step = Number(match[1]);
+  return Number.isInteger(step) && step > 0 ? step : null;
+}
+
+function resolveAccountRunRecordReasonForStop(status, reason = '') {
+  const text = String(reason || '').trim();
+  const stoppedStep = extractStoppedStepFromRecordStatus(status);
+
+  if (!stoppedStep) {
+    if (!text || text === STOP_ERROR_MESSAGE || /^流程已被用户停止。?$/.test(text)) {
+      return '流程已停止。';
+    }
+    return text;
+  }
+
+  if (!text || text === STOP_ERROR_MESSAGE || /^流程已被用户停止。?$/.test(text)) {
+    return `步骤 ${stoppedStep} 已被用户停止。`;
+  }
+
+  if (/流程尚未完成/.test(text) || /已使用邮箱/.test(text)) {
+    return `步骤 ${stoppedStep} 已停止：邮箱已设置，流程尚未完成。`;
+  }
+
+  if (/步骤\s*\d+\s*已(?:被用户)?停止/.test(text)) {
+    return text.replace(/步骤\s*\d+/, `步骤 ${stoppedStep}`);
+  }
+
+  return text;
+}
+
 function getAutoRunStatusPayload(phase, payload = {}) {
   const normalizedPayload = {
     ...payload,
     currentRun: payload.currentRun ?? autoRunCurrentRun,
     totalRuns: payload.totalRuns ?? autoRunTotalRuns,
     attemptRun: payload.attemptRun ?? autoRunAttemptRun,
+    sessionId: payload.sessionId ?? payload.autoRunSessionId ?? autoRunSessionId,
   };
   if (typeof loggingStatus !== 'undefined' && loggingStatus?.getAutoRunStatusPayload) {
     return loggingStatus.getAutoRunStatusPayload(phase, normalizedPayload);
@@ -4004,6 +4280,7 @@ function getAutoRunStatusPayload(phase, payload = {}) {
     autoRunCurrentRun: normalizedPayload.currentRun ?? 0,
     autoRunTotalRuns: normalizedPayload.totalRuns ?? 1,
     autoRunAttemptRun: normalizedPayload.attemptRun ?? 0,
+    autoRunSessionId: normalizeAutoRunSessionId(normalizedPayload.sessionId),
     scheduledAutoRunAt: Number.isFinite(Number(normalizedPayload.scheduledAt)) ? Number(normalizedPayload.scheduledAt) : null,
     autoRunCountdownAt: Number.isFinite(Number(normalizedPayload.countdownAt)) ? Number(normalizedPayload.countdownAt) : null,
     autoRunCountdownTitle: normalizedPayload.countdownTitle === undefined ? '' : String(normalizedPayload.countdownTitle || ''),
@@ -4021,6 +4298,7 @@ async function broadcastAutoRunStatus(phase, payload = {}, extraState = {}) {
     currentRun: payload.currentRun ?? autoRunCurrentRun,
     totalRuns: payload.totalRuns ?? autoRunTotalRuns,
     attemptRun: payload.attemptRun ?? autoRunAttemptRun,
+    sessionId: payload.sessionId ?? payload.autoRunSessionId ?? autoRunSessionId,
     scheduledAt: rawScheduledAt === null ? null : Number(rawScheduledAt),
     countdownAt: rawCountdownAt === null ? null : Number(rawCountdownAt),
     countdownTitle: payload.countdownTitle === undefined ? '' : String(payload.countdownTitle || ''),
@@ -4130,6 +4408,7 @@ function getAutoRunTimerResumeOptions(plan) {
   if (normalizedPlan.kind === AUTO_RUN_TIMER_KIND_SCHEDULED_START) {
     return {
       loopOptions: {
+        autoRunSessionId: normalizedPlan.autoRunSessionId,
         autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
         mode: normalizedPlan.mode,
       },
@@ -4137,6 +4416,7 @@ function getAutoRunTimerResumeOptions(plan) {
         currentRun: 0,
         totalRuns: normalizedPlan.totalRuns,
         attemptRun: 0,
+        sessionId: normalizedPlan.autoRunSessionId,
       },
     };
   }
@@ -4145,6 +4425,7 @@ function getAutoRunTimerResumeOptions(plan) {
     const nextRun = Math.min(normalizedPlan.currentRun + 1, normalizedPlan.totalRuns);
     return {
       loopOptions: {
+        autoRunSessionId: normalizedPlan.autoRunSessionId,
         autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
         mode: 'restart',
         resumeCurrentRun: nextRun,
@@ -4155,12 +4436,14 @@ function getAutoRunTimerResumeOptions(plan) {
         currentRun: nextRun,
         totalRuns: normalizedPlan.totalRuns,
         attemptRun: 1,
+        sessionId: normalizedPlan.autoRunSessionId,
       },
     };
   }
 
   return {
     loopOptions: {
+      autoRunSessionId: normalizedPlan.autoRunSessionId,
       autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
       mode: 'restart',
       resumeCurrentRun: normalizedPlan.currentRun,
@@ -4171,6 +4454,7 @@ function getAutoRunTimerResumeOptions(plan) {
       currentRun: normalizedPlan.currentRun,
       totalRuns: normalizedPlan.totalRuns,
       attemptRun: normalizedPlan.attemptRun,
+      sessionId: normalizedPlan.autoRunSessionId,
     },
   };
 }
@@ -4196,6 +4480,9 @@ async function launchAutoRunTimerPlan(trigger = 'alarm', options = {}) {
     if (autoRunActive) {
       return false;
     }
+    if (plan.autoRunSessionId && !isCurrentAutoRunSessionId(plan.autoRunSessionId)) {
+      return false;
+    }
 
     const resumeOptions = getAutoRunTimerResumeOptions(plan);
     if (!resumeOptions) {
@@ -4213,9 +4500,13 @@ async function launchAutoRunTimerPlan(trigger = 'alarm', options = {}) {
     }
 
     await clearAutoRunTimerAlarm();
+    if (plan.autoRunSessionId && !isCurrentAutoRunSessionId(plan.autoRunSessionId)) {
+      return false;
+    }
     autoRunCurrentRun = resumeOptions.statusPayload.currentRun;
     autoRunTotalRuns = plan.totalRuns;
     autoRunAttemptRun = resumeOptions.statusPayload.attemptRun;
+    autoRunSessionId = normalizeAutoRunSessionId(plan.autoRunSessionId);
     if (plan.kind === AUTO_RUN_TIMER_KIND_SCHEDULED_START && trigger !== 'manual' && state.autoRunDelayEnabled) {
       await setAutoRunDelayEnabledState(false);
     }
@@ -4230,6 +4521,9 @@ async function launchAutoRunTimerPlan(trigger = 'alarm', options = {}) {
       }
     );
 
+    if (plan.autoRunSessionId && !isCurrentAutoRunSessionId(plan.autoRunSessionId)) {
+      return false;
+    }
     clearStopRequest();
     let logMessage = '倒计时结束，自动运行开始执行。';
     if (plan.kind === AUTO_RUN_TIMER_KIND_BETWEEN_ROUNDS) {
@@ -4244,6 +4538,9 @@ async function launchAutoRunTimerPlan(trigger = 'alarm', options = {}) {
       logMessage = '已手动跳过倒计时，自动运行立即开始。';
     }
     await addLog(logMessage, 'info');
+    if (plan.autoRunSessionId && !isCurrentAutoRunSessionId(plan.autoRunSessionId)) {
+      return false;
+    }
 
     startAutoRunLoop(plan.totalRuns, resumeOptions.loopOptions);
     return true;
@@ -4262,17 +4559,20 @@ async function scheduleAutoRun(totalRuns, options = {}) {
   }
 
   const delayMinutes = normalizeAutoRunDelayMinutes(options.delayMinutes);
+  const sessionId = createAutoRunSessionId();
   const timerPlan = normalizeAutoRunTimerPlan({
     kind: AUTO_RUN_TIMER_KIND_SCHEDULED_START,
     fireAt: Date.now() + delayMinutes * 60 * 1000,
     totalRuns,
     autoRunSkipFailures: options.autoRunSkipFailures,
+    autoRunSessionId: sessionId,
     mode: options.mode,
   });
 
   autoRunCurrentRun = 0;
   autoRunTotalRuns = timerPlan.totalRuns;
   autoRunAttemptRun = 0;
+  autoRunSessionId = sessionId;
 
   await persistAutoRunTimerPlan(timerPlan, {
     autoRunSkipFailures: timerPlan.autoRunSkipFailures,
@@ -4295,14 +4595,17 @@ async function cancelScheduledAutoRun(options = {}) {
   autoRunCurrentRun = 0;
   autoRunTotalRuns = plan.totalRuns;
   autoRunAttemptRun = 0;
+  clearCurrentAutoRunSessionId(plan.autoRunSessionId);
   await broadcastAutoRunStatus(
     'idle',
     {
       currentRun: 0,
       totalRuns: plan.totalRuns,
       attemptRun: 0,
+      sessionId: 0,
     },
     {
+      autoRunSessionId: 0,
       autoRunRoundSummaries: [],
       autoRunTimerPlan: null,
       scheduledAutoRunPlan: null,
@@ -4317,21 +4620,37 @@ async function cancelScheduledAutoRun(options = {}) {
 
 async function restoreAutoRunTimerIfNeeded() {
   const state = await getState();
-  const plan = getPendingAutoRunTimerPlan(state);
+  let plan = getPendingAutoRunTimerPlan(state);
   if (!plan) {
+    clearCurrentAutoRunSessionId();
     if (state.autoRunPhase === 'scheduled' || state.autoRunPhase === 'waiting_interval') {
       await clearAutoRunTimerAlarm();
       await broadcastAutoRunStatus('idle', {
         currentRun: 0,
         totalRuns: 1,
         attemptRun: 0,
+        sessionId: 0,
       }, {
+        autoRunSessionId: 0,
         autoRunRoundSummaries: [],
         autoRunTimerPlan: null,
         scheduledAutoRunPlan: null,
       });
     }
     return;
+  }
+
+  if (!plan.autoRunSessionId) {
+    const restoredSessionId = createAutoRunSessionId();
+    plan = await persistAutoRunTimerPlan({
+      ...plan,
+      autoRunSessionId: restoredSessionId,
+    }, {
+      autoRunSkipFailures: plan.autoRunSkipFailures,
+      autoRunRoundSummaries: serializeAutoRunRoundSummaries(plan.totalRuns, plan.roundSummaries),
+    });
+  } else {
+    setCurrentAutoRunSessionId(plan.autoRunSessionId);
   }
 
   if (plan.fireAt <= Date.now()) {
@@ -4344,6 +4663,7 @@ async function restoreAutoRunTimerIfNeeded() {
     statusPayload.phase,
     statusPayload,
     {
+      autoRunSessionId: plan.autoRunSessionId,
       autoRunSkipFailures: plan.autoRunSkipFailures,
       autoRunRoundSummaries: serializeAutoRunRoundSummaries(plan.totalRuns, plan.roundSummaries),
       autoRunTimerPlan: plan,
@@ -4413,7 +4733,11 @@ async function skipStep(step) {
   return { ok: true, step, status: 'skipped' };
 }
 
-function throwIfStopped() {
+function throwIfStopped(error = null) {
+  const errorMessage = typeof error === 'string' ? error : error?.message;
+  if (errorMessage === STOP_ERROR_MESSAGE) {
+    throw error instanceof Error ? error : new Error(STOP_ERROR_MESSAGE);
+  }
   if (stopRequested) {
     throw new Error(STOP_ERROR_MESSAGE);
   }
@@ -4546,6 +4870,7 @@ async function handleStepData(step, payload) {
       if (payload.sub2apiOAuthState !== undefined) updates.sub2apiOAuthState = payload.sub2apiOAuthState || null;
       if (payload.sub2apiGroupId !== undefined) updates.sub2apiGroupId = payload.sub2apiGroupId || null;
       if (payload.sub2apiDraftName !== undefined) updates.sub2apiDraftName = payload.sub2apiDraftName || null;
+      if (payload.sub2apiProxyId !== undefined) updates.sub2apiProxyId = payload.sub2apiProxyId || null;
       if (Object.keys(updates).length) {
         await setState(updates);
       }
@@ -4604,6 +4929,7 @@ async function handleStepData(step, payload) {
         await setState({
           localhostUrl: payload.localhostUrl,
           oauthFlowDeadlineAt: null,
+          oauthFlowDeadlineSourceUrl: null,
         });
         broadcastDataUpdate({ localhostUrl: payload.localhostUrl });
       }
@@ -4722,7 +5048,6 @@ async function appendManualAccountRunRecordIfNeeded(status, stateOverride = null
   if (isAutoRunLockedState(state) || state.cpaUploadRunning) {
     return null;
   }
-
   return appendAndBroadcastAccountRunRecord(status, state, reason);
 }
 
@@ -4808,6 +5133,59 @@ async function waitForRunningStepsToFinish(payload = {}) {
   return currentState;
 }
 
+const AUTH_CHAIN_STEP_IDS = new Set([7, 8, 9, 10]);
+let activeTopLevelAuthChainExecution = null;
+
+function isAuthChainStep(step) {
+  return AUTH_CHAIN_STEP_IDS.has(Number(step));
+}
+
+async function acquireTopLevelAuthChainExecution(step) {
+  const normalizedStep = Number(step);
+  if (!isAuthChainStep(normalizedStep)) {
+    return {
+      joined: false,
+      release() {},
+    };
+  }
+
+  if (activeTopLevelAuthChainExecution) {
+    const activeExecution = activeTopLevelAuthChainExecution;
+    await addLog(
+      `步骤 ${normalizedStep}：检测到步骤 ${activeExecution.step} 正在运行，本次请求将复用当前授权链，不再重复启动。`,
+      'warn'
+    );
+    const result = await activeExecution.promise;
+    if (result?.error) {
+      throw result.error;
+    }
+    return {
+      joined: true,
+      release() {},
+    };
+  }
+
+  let settleExecution = () => {};
+  const promise = new Promise((resolve) => {
+    settleExecution = (error = null) => resolve({ error });
+  });
+  const execution = {
+    step: normalizedStep,
+    promise,
+  };
+  activeTopLevelAuthChainExecution = execution;
+
+  return {
+    joined: false,
+    release(error = null) {
+      if (activeTopLevelAuthChainExecution === execution) {
+        activeTopLevelAuthChainExecution = null;
+      }
+      settleExecution(error);
+    },
+  };
+}
+
 async function markRunningStepsStopped() {
   const state = await getState();
   const runningSteps = getRunningSteps(state.stepStatuses);
@@ -4820,6 +5198,8 @@ async function markRunningStepsStopped() {
 async function requestStop(options = {}) {
   const { logMessage = '已收到停止请求，正在取消当前操作...' } = options;
   const state = await getState();
+  const runningSteps = getRunningSteps(state.stepStatuses);
+  const inferredStopStep = inferStoppedRecordStep(state);
   const timerPlan = getPendingAutoRunTimerPlan(state);
 
   if (timerPlan?.kind === AUTO_RUN_TIMER_KIND_SCHEDULED_START && !autoRunActive) {
@@ -4835,6 +5215,7 @@ async function requestStop(options = {}) {
     autoRunCurrentRun = timerPlan.currentRun;
     autoRunTotalRuns = timerPlan.totalRuns;
     autoRunAttemptRun = timerPlan.attemptRun;
+    clearCurrentAutoRunSessionId(timerPlan.autoRunSessionId);
     if (options.logMessage !== false) {
       await addLog(options.logMessage || '已停止等待中的自动流程。', 'warn');
     }
@@ -4842,7 +5223,9 @@ async function requestStop(options = {}) {
       currentRun: timerPlan.currentRun,
       totalRuns: timerPlan.totalRuns,
       attemptRun: timerPlan.attemptRun,
+      sessionId: 0,
     }, {
+      autoRunSessionId: 0,
       autoRunSkipFailures: timerPlan.autoRunSkipFailures,
       autoRunRoundSummaries: serializeAutoRunRoundSummaries(timerPlan.totalRuns, timerPlan.roundSummaries),
       autoRunTimerPlan: null,
@@ -4856,12 +5239,17 @@ async function requestStop(options = {}) {
   if (stopRequested) return;
 
   stopRequested = true;
+  clearCurrentAutoRunSessionId();
   cancelPendingCommands();
   cleanupStep8NavigationListeners();
   rejectPendingStep8(new Error(STOP_ERROR_MESSAGE));
 
   await addLog(logMessage, 'warn');
   await broadcastStopToContentScripts();
+
+  if (!runningSteps.length && Number.isInteger(inferredStopStep) && inferredStopStep > 0) {
+    await appendAndBroadcastAccountRunRecord('stopped', state, STOP_ERROR_MESSAGE);
+  }
 
   for (const waiter of stepWaiters.values()) {
     waiter.reject(new Error(STOP_ERROR_MESSAGE));
@@ -4879,7 +5267,9 @@ async function requestStop(options = {}) {
     currentRun: autoRunCurrentRun,
     totalRuns: autoRunTotalRuns,
     attemptRun: autoRunAttemptRun,
+    sessionId: 0,
   }, {
+    autoRunSessionId: 0,
     autoRunTimerPlan: null,
     scheduledAutoRunPlan: null,
   });
@@ -4892,26 +5282,38 @@ async function requestStop(options = {}) {
 async function executeStep(step, options = {}) {
   const { deferRetryableTransportError = false } = options;
   console.log(LOG_PREFIX, `Executing step ${step}`);
-  throwIfStopped();
-  await setStepStatus(step, 'running');
-  await addLog(`步骤 ${step} 开始执行`);
-  await humanStepDelay();
-
-  const state = await getState();
-
-  // Set flow start time on first step
-  if (step === 1 && !state.flowStartTime) {
-    await setState({ flowStartTime: Date.now() });
+  const authChainClaim = await acquireTopLevelAuthChainExecution(step);
+  if (authChainClaim.joined) {
+    return;
   }
 
+  let executionError = null;
+  throwIfStopped();
   try {
+    await setStepStatus(step, 'running');
+    await addLog(`步骤 ${step} 开始执行`);
+    await humanStepDelay();
+
+    const state = await getState();
+
+    // Set flow start time on first step
+    if (step === 1 && !state.flowStartTime) {
+      await setState({ flowStartTime: Date.now() });
+    }
+
     await stepRegistry.executeStep(step, state);
   } catch (err) {
+    executionError = err;
+    const state = await getState();
     if (isStopError(err)) {
       await setStepStatus(step, 'stopped');
       await addLog(`步骤 ${step} 已被用户停止`, 'warn');
       await appendManualAccountRunRecordIfNeeded(`step${step}_stopped`, state, getErrorMessage(err));
       throw err;
+    }
+    if (isTerminalSecurityBlockedError(err)) {
+      await handleCloudflareSecurityBlocked(err);
+      throw new Error(STOP_ERROR_MESSAGE);
     }
     if (!(deferRetryableTransportError && doesStepUseCompletionSignal(step) && isRetryableContentScriptTransportError(err))) {
       await setStepStatus(step, 'failed');
@@ -4924,6 +5326,8 @@ async function executeStep(step, options = {}) {
       );
     }
     throw err;
+  } finally {
+    authChainClaim.release(executionError);
   }
 }
 
@@ -5043,6 +5447,8 @@ let autoRunActive = false;
 let autoRunCurrentRun = 0;
 let autoRunTotalRuns = 1;
 let autoRunAttemptRun = 0;
+let autoRunSessionId = 0;
+let autoRunSessionSeed = 0;
 const EMAIL_FETCH_MAX_ATTEMPTS = 5;
 const VERIFICATION_POLL_MAX_ROUNDS = 5;
 const STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS = 25000;
@@ -5068,6 +5474,15 @@ const accountRunHistoryHelpers = self.MultiPageBackgroundAccountRunHistory?.crea
   getState,
   normalizeAccountRunHistoryHelperBaseUrl,
 });
+const contributionOAuthManager = self.MultiPageBackgroundContributionOAuth?.createContributionOAuthManager({
+  addLog,
+  broadcastDataUpdate,
+  chrome,
+  closeLocalhostCallbackTabs,
+  getState,
+  setState,
+});
+contributionOAuthManager?.ensureCallbackListeners?.();
 
 async function broadcastAccountRunHistoryUpdate() {
   if (!accountRunHistoryHelpers?.getPersistedAccountRunHistory) {
@@ -5084,7 +5499,10 @@ async function appendAndBroadcastAccountRunRecord(status, stateOverride = null, 
     return null;
   }
 
-  const record = await accountRunHistoryHelpers.appendAccountRunRecord(status, stateOverride, reason);
+  const state = stateOverride || await getState();
+  const resolvedStatus = resolveAccountRunRecordStatusForStop(status, state);
+  const resolvedReason = resolveAccountRunRecordReasonForStop(resolvedStatus, reason);
+  const record = await accountRunHistoryHelpers.appendAccountRunRecord(resolvedStatus, state, resolvedReason);
   if (!record) {
     return null;
   }
@@ -5103,6 +5521,16 @@ async function clearAndBroadcastAccountRunHistory(stateOverride = null) {
   return result;
 }
 
+async function deleteAndBroadcastAccountRunHistoryRecords(recordIds = [], stateOverride = null) {
+  if (!accountRunHistoryHelpers?.deleteAccountRunHistoryRecords) {
+    return { deletedCount: 0, remainingCount: 0 };
+  }
+
+  const result = await accountRunHistoryHelpers.deleteAccountRunHistoryRecords(recordIds, stateOverride);
+  await broadcastAccountRunHistoryUpdate();
+  return result;
+}
+
 const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoRunController({
   addLog,
   appendAccountRunRecord: (...args) => appendAndBroadcastAccountRunRecord(...args),
@@ -5114,6 +5542,7 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   broadcastStopToContentScripts,
   cancelPendingCommands,
   clearStopRequest: () => clearStopRequest(),
+  createAutoRunSessionId: () => createAutoRunSessionId(),
   getAutoRunStatusPayload,
   getErrorMessage,
   getFirstUnfinishedStep,
@@ -5122,7 +5551,9 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   getState,
   getStopRequested: () => stopRequested,
   hasSavedProgress,
+  isAddPhoneAuthFailure,
   isRestartCurrentAttemptError,
+  isSignupUserAlreadyExistsFailure,
   isStopError,
   launchAutoRunTimerPlan,
   normalizeAutoRunFallbackThreadIntervalMinutes,
@@ -5135,16 +5566,19 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
       autoRunCurrentRun,
       autoRunTotalRuns,
       autoRunAttemptRun,
+      autoRunSessionId,
     }),
     set: (updates = {}) => {
       if (updates.autoRunActive !== undefined) autoRunActive = Boolean(updates.autoRunActive);
       if (updates.autoRunCurrentRun !== undefined) autoRunCurrentRun = Number(updates.autoRunCurrentRun) || 0;
       if (updates.autoRunTotalRuns !== undefined) autoRunTotalRuns = Number(updates.autoRunTotalRuns) || 0;
       if (updates.autoRunAttemptRun !== undefined) autoRunAttemptRun = Number(updates.autoRunAttemptRun) || 0;
+      if (updates.autoRunSessionId !== undefined) autoRunSessionId = normalizeAutoRunSessionId(updates.autoRunSessionId);
     },
   },
   setState,
   sleepWithStop,
+  throwIfAutoRunSessionStopped: (sessionId) => throwIfAutoRunSessionStopped(sessionId),
   waitForRunningStepsToFinish,
   throwIfStopped: () => throwIfStopped(),
   chrome,
@@ -5420,10 +5854,6 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
     try {
       await executeStepAndWait(step, AUTO_STEP_DELAYS[step]);
       const latestState = await getState();
-      if (step === FINAL_OAUTH_CHAIN_START_STEP && shouldSkipLoginVerificationForCpaCallback(latestState)) {
-        step = 9;
-        continue;
-      }
       step += 1;
     } catch (err) {
       if (isStopError(err)) {
@@ -5431,6 +5861,9 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
       }
 
       if (step === 4) {
+        if (isSignupUserAlreadyExistsFailure(err)) {
+          throw err;
+        }
         step4RestartCount += 1;
         const preservedState = await getState();
         const preservedEmail = String(preservedState.email || '').trim();
@@ -5584,6 +6017,7 @@ async function resumeAutoRun() {
 
   await addLog('检测到自动流程暂停上下文已丢失，正在从当前进度恢复自动运行...', 'warn');
   startAutoRunLoop(totalRuns, {
+    autoRunSessionId: normalizeAutoRunSessionId(state.autoRunSessionId),
     autoRunSkipFailures: Boolean(state.autoRunSkipFailures),
     mode: 'continue',
     resumeCurrentRun: currentRun,
@@ -5667,7 +6101,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
 const step1Executor = self.MultiPageBackgroundStep1?.createStep1Executor({
   addLog,
   completeStepFromBackground,
-  ensureSignupEntryPageReady,
+  openSignupEntryTab,
 });
 const step2Executor = self.MultiPageBackgroundStep2?.createStep2Executor({
   addLog,
@@ -5729,13 +6163,12 @@ const step7Executor = self.MultiPageBackgroundStep7?.createStep7Executor({
   getLoginAuthStateLabel,
   getOAuthFlowStepTimeoutMs,
   getState,
+  isAddPhoneAuthFailure,
   isStep6RecoverableResult,
   isStep6SuccessResult,
   refreshOAuthUrlBeforeStep6,
   reuseOrCreateTab,
   sendToContentScriptResilient,
-  shouldSkipLoginVerificationForCpaCallback,
-  skipLoginVerificationStepsForCpaCallback,
   startOAuthFlowTimeoutWindow,
   STEP6_MAX_ATTEMPTS,
   throwIfStopped,
@@ -5746,7 +6179,6 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   confirmCustomVerificationStepBypass: verificationFlowHelpers.confirmCustomVerificationStepBypass,
   ensureStep8VerificationPageReady,
-  executeStep7: (...args) => executeStep7(...args),
   getOAuthFlowRemainingMs,
   getOAuthFlowStepTimeoutMs,
   getPanelMode,
@@ -5758,6 +6190,7 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   isVerificationMailPollingError,
   LUCKMAIL_PROVIDER,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
+  rerunStep7ForStep8Recovery: (...args) => rerunStep7ForStep8Recovery(...args),
   reuseOrCreateTab,
   setState,
   setStepStatus,
@@ -5797,7 +6230,7 @@ const stepExecutorsByKey = {
   'oauth-login': (state) => step7Executor.executeStep7(state),
   'fetch-login-code': (state) => step8Executor.executeStep8(state),
   'confirm-oauth': (state) => step9Executor.executeStep9(state),
-  'platform-verify': (state) => step10Executor.executeStep10(state),
+  'platform-verify': (state) => executeStep10(state),
 };
 const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter({
   addLog,
@@ -5810,6 +6243,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   cancelScheduledAutoRun,
   checkIcloudSession,
   clearAccountRunHistory: (...args) => clearAndBroadcastAccountRunHistory(...args),
+  deleteAccountRunHistoryRecords: (...args) => deleteAndBroadcastAccountRunHistoryRecords(...args),
   clearAutoRunTimerAlarm,
   clearLuckmailRuntimeState,
   clearStopRequest,
@@ -5843,9 +6277,11 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   getSourceLabel,
   getState,
   getStopRequested: () => stopRequested,
+  handleCloudflareSecurityBlocked,
   handleAutoRunLoopUnhandledError,
   importSettingsBundle,
   invalidateDownstreamAfterStepRestart,
+  isCloudflareSecurityBlockedError: isTerminalSecurityBlockedError,
   isAutoRunLockedState,
   isHotmailProvider,
   isLocalhostOAuthCallbackUrl,
@@ -5867,6 +6303,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   scheduleAutoRun,
   selectLuckmailPurchase,
   setCurrentHotmailAccount,
+  setContributionMode,
   setEmailState,
   setEmailStateSilently,
   setIcloudAliasPreservedState,
@@ -5880,7 +6317,9 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   skipAutoRunCountdown,
   skipStep,
   startCpaUploadFlow,
+  startContributionFlow: (...args) => contributionOAuthManager?.startContributionFlow?.(...args),
   startAutoRunLoop,
+  pollContributionStatus: (...args) => contributionOAuthManager?.pollContributionStatus?.(...args),
   syncHotmailAccounts,
   testHotmailAccountMailAccess,
   upsertHotmailAccount,
@@ -6227,7 +6666,24 @@ async function runPreStep6CookieCleanup() {
 // ============================================================
 
 async function refreshOAuthUrlBeforeStep6(state) {
-  await addLog(`步骤 7：正在刷新登录用的 ${getPanelModeLabel(state)} OAuth 链接...`);
+  if (state?.contributionModeExpected && !state?.contributionMode) {
+    throw new Error('步骤 7：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API 链路。请重新进入贡献模式后再点击自动。');
+  }
+  if (state?.contributionMode && contributionOAuthManager?.startContributionFlow) {
+    await addLog('步骤 7：contributionMode=true，走公开贡献接口，正在申请 OAuth 登录地址...', 'info');
+    const contributionState = await contributionOAuthManager.startContributionFlow({
+      nickname: state.email,
+      openAuthTab: false,
+      stateOverride: state,
+    });
+    const oauthUrl = String(contributionState?.contributionAuthUrl || '').trim();
+    if (!oauthUrl) {
+      throw new Error('贡献模式未返回可用的登录地址，请稍后重试。');
+    }
+    await handleStepData(1, { oauthUrl });
+    return oauthUrl;
+  }
+  await addLog(`步骤 7：contributionMode=false，走普通 CPA / SUB2API 链路（当前面板：${getPanelModeLabel(state)}），正在刷新 OAuth 登录地址...`, 'info');
   console.log(LOG_PREFIX, '[refreshOAuthUrlBeforeStep6] requesting fresh OAuth directly from panel');
   const refreshResult = await requestOAuthUrlFromPanel(state, { logLabel: '步骤 7' });
   await handleStepData(1, refreshResult);
@@ -6253,10 +6709,18 @@ function normalizeOAuthFlowDeadlineAt(value) {
   return Math.floor(numeric);
 }
 
+function normalizeOAuthFlowSourceUrl(value) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
 async function startOAuthFlowTimeoutWindow(options = {}) {
   const step = Number(options.step) || 7;
   const deadlineAt = Date.now() + OAUTH_FLOW_TIMEOUT_MS;
-  await setState({ oauthFlowDeadlineAt: deadlineAt });
+  await setState({
+    oauthFlowDeadlineAt: deadlineAt,
+    oauthFlowDeadlineSourceUrl: normalizeOAuthFlowSourceUrl(options.oauthUrl),
+  });
   await addLog(`步骤 ${step}：已拿到新的 OAuth 登录地址，开始 6 分钟倒计时。`, 'info');
   return deadlineAt;
 }
@@ -6266,7 +6730,19 @@ async function getOAuthFlowRemainingMs(options = {}) {
   const actionLabel = String(options.actionLabel || '后续授权流程').trim() || '后续授权流程';
   const state = options.state || await getState();
   const deadlineAt = normalizeOAuthFlowDeadlineAt(state?.oauthFlowDeadlineAt);
+  const deadlineSourceUrl = normalizeOAuthFlowSourceUrl(state?.oauthFlowDeadlineSourceUrl);
+  const currentOauthUrl = normalizeOAuthFlowSourceUrl(options.oauthUrl !== undefined ? options.oauthUrl : state?.oauthUrl);
   if (!deadlineAt) {
+    return null;
+  }
+
+  if (deadlineSourceUrl && currentOauthUrl && deadlineSourceUrl !== currentOauthUrl) {
+    console.warn(LOG_PREFIX, '[oauth-flow] ignoring stale deadline due to oauth url mismatch', {
+      step,
+      actionLabel,
+      deadlineSourceUrl,
+      currentOauthUrl,
+    });
     return null;
   }
 
@@ -6327,7 +6803,7 @@ async function getPostStep6AutoRestartDecision(step, error) {
     };
   }
 
-  if (isAddPhoneAuthUrl(errorMessage)) {
+  if (isAddPhoneAuthFailure(error) || isAddPhoneAuthUrl(errorMessage)) {
     return {
       shouldRestart: false,
       blockedByAddPhone: true,
@@ -6396,23 +6872,59 @@ async function ensureStep8VerificationPageReady(options = {}) {
     return pageState;
   }
 
+  if (pageState.maxCheckAttemptsBlocked) {
+    throw new Error(`${CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX}${CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE}`);
+  }
+
+  if (pageState.state === 'login_timeout_error_page') {
+    const urlPart = pageState.url ? ` URL: ${pageState.url}` : '';
+    throw new Error(`STEP8_RESTART_STEP7::步骤 8：当前认证页进入登录超时报错页，请回到步骤 7 重新开始。${urlPart}`.trim());
+  }
+
+  if (pageState.state === 'add_phone_page') {
+    const urlPart = pageState.url ? ` URL: ${pageState.url}` : '';
+    throw new Error(`步骤 8：当前认证页进入手机号页面，当前流程无法继续自动授权。${urlPart}`.trim());
+  }
+
   const stateLabel = getLoginAuthStateLabel(pageState.state);
   const urlPart = pageState.url ? ` URL: ${pageState.url}` : '';
   throw new Error(`当前未进入登录验证码页面，请先重新完成步骤 7。当前状态：${stateLabel}.${urlPart}`.trim());
 }
 
-async function skipLoginVerificationStepsForCpaCallback() {
-  await setState({
-    lastLoginCode: null,
-    loginVerificationRequestedAt: null,
-    oauthFlowDeadlineAt: null,
-  });
-  await setStepStatus(7, 'skipped');
-  await addLog('步骤 7：当前已选择“第七步回调”，直接跳过步骤 7、8。', 'warn');
-  const latestState = await getState();
-  if (!isStepDoneStatus(latestState.stepStatuses?.[8])) {
-    await setStepStatus(8, 'skipped');
-    await addLog('步骤 8：当前已选择“第七步回调”，本轮无需获取登录验证码。', 'warn');
+async function rerunStep7ForStep8Recovery(options = {}) {
+  const {
+    logMessage = '步骤 8：正在回到步骤 7，重新发起登录验证码流程...',
+    postStepDelayMs = 3000,
+  } = options;
+
+  throwIfStopped();
+  const initialState = await getState();
+  await addLog(logMessage, 'warn');
+  await setStepStatus(7, 'running');
+  await addLog('步骤 7 开始执行');
+
+  try {
+    await step7Executor.executeStep7(initialState);
+  } catch (err) {
+    const latestState = await getState();
+    if (isStopError(err)) {
+      await setStepStatus(7, 'stopped');
+      await addLog('步骤 7 已被用户停止', 'warn');
+      await appendManualAccountRunRecordIfNeeded('step7_stopped', latestState, getErrorMessage(err));
+      throw err;
+    }
+    if (isTerminalSecurityBlockedError(err)) {
+      await handleCloudflareSecurityBlocked(err);
+      throw new Error(STOP_ERROR_MESSAGE);
+    }
+    await setStepStatus(7, 'failed');
+    await addLog(`步骤 7 失败：${getErrorMessage(err)}`, 'error');
+    await appendManualAccountRunRecordIfNeeded('step7_failed', latestState, getErrorMessage(err));
+    throw err;
+  }
+
+  if (postStepDelayMs > 0) {
+    await sleepWithStop(postStepDelayMs);
   }
 }
 
@@ -6549,6 +7061,9 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
   while (Date.now() - start < timeoutMs) {
     throwIfStopped();
     const pageState = await getStep8PageState(tabId);
+    if (pageState?.maxCheckAttemptsBlocked) {
+      throw new Error(`${CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX}${CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE}`);
+    }
     if (pageState?.addPhonePage) {
       throw new Error('步骤 9：认证页进入了手机号页面，当前不是 OAuth 同意页，无法继续自动授权。');
     }
@@ -6724,6 +7239,9 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
     }
 
     const pageState = await getStep8PageState(tabId);
+    if (pageState?.maxCheckAttemptsBlocked) {
+      throw new Error(`${CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX}${CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE}`);
+    }
     if (pageState?.addPhonePage) {
       throw new Error('步骤 9：点击“继续”后页面跳到了手机号页面，当前流程无法继续自动授权。');
     }
@@ -6842,7 +7360,76 @@ async function startCpaUploadFlow(payload = {}) {
 // Step 10: 平台回调验证
 // ============================================================
 
+async function executeContributionStep10(state) {
+  if (state.localhostUrl && !isLocalhostOAuthCallbackUrl(state.localhostUrl)) {
+    throw new Error('步骤 9 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 9。');
+  }
+  if (!state.localhostUrl) {
+    throw new Error('缺少 localhost 回调地址，请先完成步骤 9。');
+  }
+  if (!state.contributionSessionId) {
+    throw new Error('缺少贡献会话信息，请重新从步骤 7 开始。');
+  }
+  if (!contributionOAuthManager?.pollContributionStatus) {
+    throw new Error('贡献 OAuth 流程尚未接入，无法完成贡献模式的步骤 10。');
+  }
+
+  await addLog('步骤 10：贡献模式正在提交回调并等待最终结果...');
+
+  let latestState = await getState();
+  const callbackUrl = latestState.localhostUrl || state.localhostUrl;
+
+  if (!latestState.contributionCallbackUrl && contributionOAuthManager?.handleCapturedCallback) {
+    latestState = await contributionOAuthManager.handleCapturedCallback(callbackUrl, {
+      source: 'step10',
+    });
+  } else {
+    latestState = await contributionOAuthManager.pollContributionStatus({
+      reason: 'step10_initial',
+      stateOverride: latestState,
+    });
+  }
+
+  const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
+    ? await getOAuthFlowStepTimeoutMs(120000, {
+      step: 10,
+      actionLabel: '贡献流程最终结果',
+    })
+    : 120000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = String(latestState.contributionStatus || '').trim().toLowerCase();
+    if (contributionOAuthManager?.isContributionFinalStatus?.(status)) {
+      if (status === 'auto_approved' || status === 'manual_review_required') {
+        await addLog(`步骤 10：贡献流程已结束，最终状态：${latestState.contributionStatusMessage || status}`, status === 'auto_approved' ? 'ok' : 'warn');
+        await completeStepFromBackground(10, {
+          contributionStatus: status,
+          contributionStatusMessage: latestState.contributionStatusMessage || '',
+          localhostUrl: callbackUrl,
+        });
+        return;
+      }
+      throw new Error(latestState.contributionStatusMessage || '贡献流程失败。');
+    }
+
+    await sleepWithStop(2500);
+    latestState = await contributionOAuthManager.pollContributionStatus({
+      reason: 'step10_wait_final',
+      stateOverride: latestState,
+    });
+  }
+
+  throw new Error('步骤 10：等待贡献流程最终结果超时。');
+}
+
 async function executeStep10(state) {
+  if (state?.contributionModeExpected && !state?.contributionMode) {
+    throw new Error('步骤 10：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API 提交。请重新进入贡献模式后再点击自动。');
+  }
+  if (state?.contributionMode) {
+    return executeContributionStep10(state);
+  }
   return step10Executor.executeStep10(state);
 }
 

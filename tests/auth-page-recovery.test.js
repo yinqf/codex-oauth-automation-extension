@@ -18,11 +18,11 @@ function createRetryButton() {
 function createRecoveryApi(state) {
   const retryButton = createRetryButton();
   global.location = {
-    pathname: '/log-in',
-    href: 'https://auth.openai.com/log-in',
+    pathname: state.pathname || '/log-in',
+    href: state.href || `https://auth.openai.com${state.pathname || '/log-in'}`,
   };
   global.document = {
-    title: 'Something went wrong',
+    title: state.title ?? 'Something went wrong',
     querySelector(selector) {
       if (selector === 'button[data-dd-action-name="Try again"]' && state.retryVisible) {
         return retryButton;
@@ -42,6 +42,7 @@ function createRecoveryApi(state) {
     isActionEnabled: (element) => Boolean(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true',
     isVisibleElement: () => true,
     log: () => {},
+    routeErrorPattern: /405\s+method\s+not\s+allowed|route\s+error.*405/i,
     simulateClick: () => {
       state.clickCount += 1;
       if (typeof state.onClick === 'function') {
@@ -65,7 +66,7 @@ function createRecoveryApi(state) {
 test('auth page recovery detects retry page state', () => {
   const state = {
     clickCount: 0,
-    pageText: 'Something went wrong. Operation timed out.',
+    pageText: 'Something went wrong. Please try again.',
     retryVisible: true,
   };
   const api = createRecoveryApi(state);
@@ -77,13 +78,35 @@ test('auth page recovery detects retry page state', () => {
   assert.equal(Boolean(snapshot), true);
   assert.equal(snapshot.retryEnabled, true);
   assert.equal(snapshot.titleMatched, true);
-  assert.equal(snapshot.detailMatched, true);
+  assert.equal(snapshot.detailMatched, false);
+  assert.equal(snapshot.routeErrorMatched, false);
+  assert.equal(snapshot.maxCheckAttemptsBlocked, false);
+});
+
+test('auth page recovery detects route error retry page on email verification route', () => {
+  const state = {
+    clickCount: 0,
+    pageText: 'Route Error (405 Method Not Allowed): email-verification action missing.',
+    pathname: '/email-verification',
+    retryVisible: true,
+    title: '',
+  };
+  const api = createRecoveryApi(state);
+
+  const snapshot = api.getAuthTimeoutErrorPageState({
+    pathPatterns: [/\/email-verification(?:[/?#]|$)/i],
+  });
+
+  assert.equal(Boolean(snapshot), true);
+  assert.equal(snapshot.titleMatched, false);
+  assert.equal(snapshot.detailMatched, false);
+  assert.equal(snapshot.routeErrorMatched, true);
 });
 
 test('auth page recovery clicks retry and waits until page recovers', async () => {
   const state = {
     clickCount: 0,
-    pageText: 'Something went wrong. Operation timed out.',
+    pageText: 'Something went wrong. Please try again.',
     retryVisible: true,
   };
   const api = createRecoveryApi(state);
@@ -107,7 +130,7 @@ test('auth page recovery clicks retry and waits until page recovers', async () =
 test('auth page recovery can click retry twice before page recovers', async () => {
   const state = {
     clickCount: 0,
-    pageText: 'Something went wrong. Operation timed out.',
+    pageText: 'Something went wrong. Please try again.',
     retryVisible: true,
     onClick(currentState) {
       if (currentState.clickCount >= 2) {
@@ -135,3 +158,71 @@ test('auth page recovery can click retry twice before page recovers', async () =
   assert.equal(state.clickCount, 2);
   assert.equal(state.retryVisible, false);
 });
+
+test('auth page recovery stops after five retry clicks when page does not recover', async () => {
+  const state = {
+    clickCount: 0,
+    pageText: 'Something went wrong. Please try again.',
+    retryVisible: true,
+    onClick() {},
+  };
+  const api = createRecoveryApi(state);
+
+  await assert.rejects(
+    () => api.recoverAuthRetryPage({
+      logLabel: '步骤 8：检测到重试页，正在点击“重试”恢复',
+      maxClickAttempts: 5,
+      pathPatterns: [/\/log-in(?:[/?#]|$)/i],
+      step: 8,
+      timeoutMs: 1000,
+      waitAfterClickMs: 10,
+      pollIntervalMs: 1,
+    }),
+    /已连续点击“重试” 5 次/
+  );
+
+  assert.equal(state.clickCount, 5);
+  assert.equal(state.retryVisible, true);
+});
+
+test('auth page recovery throws cloudflare security blocked error on max_check_attempts page', async () => {
+  const state = {
+    clickCount: 0,
+    pageText: 'Something went wrong. max_check_attempts reached.',
+    retryVisible: true,
+  };
+  const api = createRecoveryApi(state);
+
+  await assert.rejects(
+    () => api.recoverAuthRetryPage({
+      logLabel: '步骤 7：检测到登录超时报错，正在点击“重试”恢复当前页面',
+      pathPatterns: [/\/log-in(?:[/?#]|$)/i],
+      step: 7,
+      timeoutMs: 1000,
+    }),
+    /CF_SECURITY_BLOCKED::/
+  );
+});
+
+test('auth page recovery throws signup user already exists error without clicking retry', async () => {
+  const state = {
+    clickCount: 0,
+    pageText: 'Something went wrong. user_already_exists.',
+    pathname: '/email-verification',
+    retryVisible: true,
+  };
+  const api = createRecoveryApi(state);
+
+  await assert.rejects(
+    () => api.recoverAuthRetryPage({
+      logLabel: '步骤 4：检测到注册认证重试页，正在点击“重试”恢复',
+      pathPatterns: [/\/email-verification(?:[/?#]|$)/i],
+      step: 4,
+      timeoutMs: 1000,
+    }),
+    /SIGNUP_USER_ALREADY_EXISTS::/
+  );
+
+  assert.equal(state.clickCount, 0);
+});
+

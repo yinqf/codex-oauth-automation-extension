@@ -51,6 +51,16 @@ function extractFunction(name) {
   return source.slice(start, end);
 }
 
+function getStep5Bundle() {
+  return [
+    extractFunction('getStep5DirectCompletionPayload'),
+    extractFunction('isStep5AllConsentText'),
+    extractFunction('findStep5AllConsentCheckbox'),
+    extractFunction('isStep5CheckboxChecked'),
+    extractFunction('step5_fillNameBirthday'),
+  ].join('\n');
+}
+
 test('step 5 clicks submit and completes immediately on birthday page', async () => {
   const step5Source = extractFunction('step5_fillNameBirthday');
   assert.ok(
@@ -158,12 +168,11 @@ function reportComplete(step, payload) {
   completions.push({ step, payload });
 }
 
-function normalizeInlineText(text) {
-  return text;
-}
+  function normalizeInlineText(text) {
+    return String(text || '').replace(/\\s+/g, ' ').trim();
+  }
 
-${extractFunction('getStep5DirectCompletionPayload')}
-${extractFunction('step5_fillNameBirthday')}
+  ${getStep5Bundle()}
 
 return {
   async run(payload) {

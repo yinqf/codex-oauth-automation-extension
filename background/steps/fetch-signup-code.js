@@ -25,6 +25,7 @@
       const mail = getMailConfig(state);
       if (mail.error) throw new Error(mail.error);
       const stepStartedAt = Date.now();
+      const verificationSessionKey = `4:${stepStartedAt}`;
       const signupTabId = await getTabId('signup-page');
       if (!signupTabId) {
         throw new Error('认证页面标签页已关闭，无法继续步骤 4。');
@@ -39,7 +40,11 @@
           type: 'PREPARE_SIGNUP_VERIFICATION',
           step: 4,
           source: 'background',
-          payload: { password: state.password || state.customPassword || '' },
+          payload: {
+            password: state.password || state.customPassword || '',
+            prepareSource: 'step4_execute',
+            prepareLogLabel: '步骤 4 执行',
+          },
         },
         {
           timeoutMs: 30000,
@@ -87,7 +92,9 @@
       }
 
       await resolveVerificationStep(4, state, mail, {
-        filterAfterTimestamp: stepStartedAt,
+        filterAfterTimestamp: mail.provider === '2925' ? 0 : stepStartedAt,
+        sessionKey: verificationSessionKey,
+        disableTimeBudgetCap: mail.provider === '2925',
         requestFreshCodeFirst: mail.provider === HOTMAIL_PROVIDER ? false : true,
         resendIntervalMs: (mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')
           ? 0

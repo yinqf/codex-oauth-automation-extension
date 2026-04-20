@@ -61,6 +61,7 @@ const DEFAULT_HOTMAIL_LOCAL_BASE_URL = 'http://127.0.0.1:17373';
 const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = DEFAULT_HOTMAIL_LOCAL_BASE_URL;
 const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
+const DEFAULT_SUB2API_PROXY_NAME = '';
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
 const VERIFICATION_RESEND_COUNT_MIN = 0;
@@ -71,10 +72,6 @@ const PERSISTED_SETTING_DEFAULTS = {
 };
 function normalizePanelMode(value) { return value === 'sub2api' ? 'sub2api' : 'cpa'; }
 function normalizeLocalCpaStep9Mode(value) { return value === 'bypass' ? 'bypass' : 'submit'; }
-function normalizeCpaCallbackMode(value) {
-  if (value === 'step7' || value === 'step6') return 'step7';
-  return value === 'step9' || value === 'step8' ? 'step9' : 'step9';
-}
 function normalizeAutoRunFallbackThreadIntervalMinutes(value) { return Number(value) || 0; }
 function normalizeAutoRunDelayMinutes(value) { return Number(value) || 30; }
 function normalizeAutoStepDelaySeconds(value) { return value == null || value === '' ? null : Number(value); }
@@ -112,5 +109,13 @@ return {
   assert.equal(
     api.normalizeAccountRunHistoryHelperBaseUrl(''),
     'http://127.0.0.1:17373'
+  );
+  assert.equal(
+    api.normalizePersistentSettingValue('sub2apiDefaultProxyName', ''),
+    ''
+  );
+  assert.equal(
+    api.normalizePersistentSettingValue('sub2apiDefaultProxyName', ' proxy-a '),
+    'proxy-a'
   );
 });

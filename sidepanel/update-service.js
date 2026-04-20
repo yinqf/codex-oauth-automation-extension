@@ -184,6 +184,26 @@
     };
   }
 
+  function getComparableReleaseVersion(release) {
+    const fallbackFamily = release?.family === VERSION_FAMILY_PRO
+      ? VERSION_FAMILY_PRO
+      : VERSION_FAMILY_LEGACY;
+    const displayVersion = String(release?.displayVersion || '').trim();
+    if (displayVersion) {
+      return displayVersion;
+    }
+    return formatDisplayVersion(release?.version || '', fallbackFamily);
+  }
+
+  function sortReleasesByVersion(releases = []) {
+    return [...releases].sort((left, right) => (
+      compareVersions(
+        getComparableReleaseVersion(right),
+        getComparableReleaseVersion(left)
+      )
+    ));
+  }
+
   function readCache() {
     try {
       const raw = localStorage.getItem(CACHE_KEY);
@@ -200,7 +220,7 @@
         return null;
       }
 
-      return parsed.releases;
+      return sortReleasesByVersion(parsed.releases).slice(0, MAX_RELEASES);
     } catch (error) {
       return null;
     }
@@ -243,12 +263,12 @@
       const releases = payload
         .filter((release) => release && !release.draft && !release.prerelease)
         .map(sanitizeRelease)
-        .filter(Boolean)
-        .sort((left, right) => compareVersions(right.version, left.version))
-        .slice(0, MAX_RELEASES);
+        .filter(Boolean);
 
-      writeCache(releases);
-      return releases;
+      const sortedReleases = sortReleasesByVersion(releases).slice(0, MAX_RELEASES);
+
+      writeCache(sortedReleases);
+      return sortedReleases;
     } catch (error) {
       if (error?.name === 'AbortError') {
         throw new Error('GitHub Releases 请求超时');

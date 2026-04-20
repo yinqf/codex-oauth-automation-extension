@@ -15,3 +15,9 @@ test('panel bridge module exposes a factory', () => {
 
   assert.equal(typeof api?.createPanelBridge, 'function');
 });
+
+test('panel bridge requests oauth url with step 7 log label payload', () => {
+  const source = fs.readFileSync('background/panel-bridge.js', 'utf8');
+  assert.match(source, /logStep:\s*7/);
+  assert.doesNotMatch(source, /logStep:\s*6/);
+});

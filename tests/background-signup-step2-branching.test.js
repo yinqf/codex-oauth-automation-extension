@@ -210,6 +210,10 @@ test('signup flow helper finalizes step 3 submit by reusing signup verification 
     type: 'PREPARE_SIGNUP_VERIFICATION',
     step: 3,
     source: 'background',
-    payload: { password: 'Secret123!' },
+    payload: {
+      password: 'Secret123!',
+      prepareSource: 'step3_finalize',
+      prepareLogLabel: '步骤 3 收尾',
+    },
   });
 });

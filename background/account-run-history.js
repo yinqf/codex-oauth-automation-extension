@@ -39,9 +39,9 @@
       return '';
     }
 
-    function extractFailedStep(status = '', detail = '') {
+    function extractRecordStep(status = '', detail = '') {
       const normalizedStatus = String(status || '').trim().toLowerCase();
-      const statusMatch = normalizedStatus.match(/^step(\d+)_failed$/);
+      const statusMatch = normalizedStatus.match(/^step(\d+)_(?:failed|stopped)$/);
       if (statusMatch) {
         const step = Number(statusMatch[1]);
         return Number.isInteger(step) && step > 0 ? step : null;
@@ -72,8 +72,14 @@
       if (finalStatus === 'success') {
         return '流程完成';
       }
+      if (finalStatus === 'stopped') {
+        if (Number.isInteger(failedStep) && failedStep > 0) {
+          return `步骤 ${failedStep} 停止`;
+        }
+        return '流程已停止';
+      }
       if (finalStatus !== 'failed') {
-        return '';
+        return '无';
       }
       if (isPhoneVerificationFailure(failureDetail)) {
         return '出现手机号验证';
@@ -138,18 +144,18 @@
       const password = String(record.password || '').trim();
       const finalStatus = normalizeFinalStatus(record.finalStatus || record.status || '');
 
-      if (!email || !password || !finalStatus || finalStatus === 'stopped') {
+      if (!email || !password || !finalStatus) {
         return null;
       }
 
       const finishedAt = String(record.finishedAt || record.recordedAt || '').trim();
-      const failureDetail = finalStatus === 'failed'
+      const failureDetail = finalStatus === 'failed' || finalStatus === 'stopped'
         ? String(record.failureDetail || record.reason || '').trim()
         : '';
       const failedStepCandidate = Number(record.failedStep);
       const failedStep = Number.isInteger(failedStepCandidate) && failedStepCandidate > 0
         ? failedStepCandidate
-        : extractFailedStep(record.finalStatus || record.status || '', failureDetail);
+        : extractRecordStep(record.finalStatus || record.status || '', failureDetail);
       const autoRunContext = normalizeAutoRunContext(record.autoRunContext);
       const retryCount = normalizeRetryCount(
         record.retryCount !== undefined
@@ -157,6 +163,8 @@
           : ((autoRunContext?.attemptRun || 0) > 1 ? autoRunContext.attemptRun - 1 : 0)
       );
       const source = normalizeSource(record.source || (autoRunContext ? 'auto' : 'manual'));
+      const computedFailureLabel = buildFailureLabel(finalStatus, failedStep, failureDetail);
+      const rawFailureLabel = String(record.failureLabel || '').trim();
 
       return {
         recordId: String(record.recordId || '').trim() || buildRecordId(email),
@@ -165,7 +173,9 @@
         finalStatus,
         finishedAt,
         retryCount,
-        failureLabel: String(record.failureLabel || '').trim() || buildFailureLabel(finalStatus, failedStep, failureDetail),
+        failureLabel: finalStatus === 'stopped'
+          ? computedFailureLabel
+          : (rawFailureLabel || computedFailureLabel),
         failureDetail,
         failedStep: Number.isInteger(failedStep) && failedStep > 0 ? failedStep : null,
         source,
@@ -204,15 +214,17 @@
 
     function buildAccountRunHistoryRecord(state = {}, status = '', reason = '') {
       const email = String(state.email || '').trim();
-      const password = String(state.password || state.customPassword || '').trim();
+      const password = String(state.password || state.customPassword || '').trim() || '无';
       const finalStatus = normalizeFinalStatus(status);
 
-      if (!email || !password || !finalStatus || finalStatus === 'stopped') {
+      if (!email || !finalStatus) {
         return null;
       }
 
-      const failureDetail = finalStatus === 'failed' ? String(reason || '').trim() : '';
-      const failedStep = finalStatus === 'failed' ? extractFailedStep(status, failureDetail) : null;
+      const failureDetail = finalStatus === 'failed' || finalStatus === 'stopped' ? String(reason || '').trim() : '';
+      const failedStep = finalStatus === 'failed' || finalStatus === 'stopped'
+        ? extractRecordStep(status, failureDetail)
+        : null;
       const source = Boolean(state.autoRunning) ? 'auto' : 'manual';
       const autoRunContext = source === 'auto' ? buildAutoRunContextFromState(state) : null;
       const retryCount = source === 'auto' ? getRetryCountFromState(state) : 0;
@@ -251,6 +263,30 @@
       return normalizeAccountRunHistory(nextHistory);
     }
 
+    function deleteAccountRunHistoryEntries(history, recordIds = []) {
+      const normalizedHistory = normalizeAccountRunHistory(history);
+      const normalizedIds = Array.isArray(recordIds)
+        ? recordIds
+          .map((value) => String(value || '').trim().toLowerCase())
+          .filter(Boolean)
+        : [];
+
+      if (!normalizedIds.length) {
+        return {
+          deletedCount: 0,
+          nextHistory: normalizedHistory,
+        };
+      }
+
+      const selectedIds = new Set(normalizedIds);
+      const nextHistory = normalizedHistory.filter((record) => !selectedIds.has(buildRecordId(record.recordId || record.email)));
+
+      return {
+        deletedCount: normalizedHistory.length - nextHistory.length,
+        nextHistory: normalizeAccountRunHistory(nextHistory),
+      };
+    }
+
     async function appendAccountRunHistoryRecord(status, stateOverride = null, reason = '') {
       const state = stateOverride || await getState();
       const record = buildAccountRunHistoryRecord(state, status, reason);
@@ -271,6 +307,8 @@
           summary.success += 1;
         } else if (record.finalStatus === 'failed') {
           summary.failed += 1;
+        } else if (record.finalStatus === 'stopped') {
+          summary.stopped += 1;
         }
         summary.retryTotal += normalizeRetryCount(record.retryCount);
         return summary;
@@ -278,6 +316,7 @@
         total: 0,
         success: 0,
         failed: 0,
+        stopped: 0,
         retryTotal: 0,
       });
     }
@@ -292,6 +331,9 @@
     }
 
     function shouldSyncAccountRunHistorySnapshot(state = {}) {
+      if (Boolean(state.contributionMode)) {
+        return false;
+      }
       if (!Boolean(state.accountRunHistoryTextEnabled)) {
         return false;
       }
@@ -378,12 +420,42 @@
       };
     }
 
+    async function deleteAccountRunHistoryRecords(recordIds = [], stateOverride = null) {
+      const state = stateOverride || await getState();
+      const history = await getPersistedAccountRunHistory();
+      const { deletedCount, nextHistory } = deleteAccountRunHistoryEntries(history, recordIds);
+
+      if (!deletedCount) {
+        return {
+          deletedCount: 0,
+          remainingCount: history.length,
+        };
+      }
+
+      await setPersistedAccountRunHistory(nextHistory);
+
+      try {
+        const filePath = await syncAccountRunHistorySnapshot(nextHistory, state);
+        if (filePath) {
+          await addLog(`账号记录快照已同步到本地：${filePath}`, 'info');
+        }
+      } catch (err) {
+        await addLog(getErrorMessage(err), 'warn');
+      }
+
+      return {
+        deletedCount,
+        remainingCount: nextHistory.length,
+      };
+    }
+
     return {
       appendAccountRunRecord,
       appendAccountRunHistoryRecord,
       buildAccountRunHistoryRecord,
       buildAccountRunHistorySnapshotPayload,
       clearAccountRunHistory,
+      deleteAccountRunHistoryRecords,
       getPersistedAccountRunHistory,
       normalizeAccountRunHistory,
       normalizeAccountRunHistoryRecord,

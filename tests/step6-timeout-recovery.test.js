@@ -51,7 +51,7 @@ function extractFunction(name) {
   return source.slice(start, end);
 }
 
-test('step 6 timeout recoverable result clicks retry before asking background to rerun', async () => {
+test('step 7 timeout recoverable result clicks retry before asking background to rerun', async () => {
   const api = new Function(`
 const logs = [];
 let recoverCalls = 0;

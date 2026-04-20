@@ -98,6 +98,10 @@ function fillInput(input, value) {
 
 async function humanPause() {}
 async function sleep() {}
+function throwIfStopped() {}
+function isStopError() {
+  return false;
+}
 
 function log(message, level = 'info') {
   logs.push({ message, level });

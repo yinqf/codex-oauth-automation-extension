@@ -14,6 +14,7 @@ function createRouter(overrides = {}) {
     finalizePayloads: [],
     notifyCompletions: [],
     notifyErrors: [],
+    securityBlocks: [],
   };
 
   const router = api.createMessageRouter({
@@ -56,8 +57,14 @@ function createRouter(overrides = {}) {
     getState: async () => overrides.state || { stepStatuses: { 3: 'pending' } },
     getStopRequested: () => false,
     handleAutoRunLoopUnhandledError: async () => {},
+    handleCloudflareSecurityBlocked: overrides.handleCloudflareSecurityBlocked || (async (error) => {
+      const message = typeof error === 'string' ? error : error?.message || '';
+      events.securityBlocks.push(message);
+      return message.replace(/^CF_SECURITY_BLOCKED::/, '') || message;
+    }),
     importSettingsBundle: async () => {},
     invalidateDownstreamAfterStepRestart: async () => {},
+    isCloudflareSecurityBlockedError: overrides.isCloudflareSecurityBlockedError || ((error) => /^CF_SECURITY_BLOCKED::/.test(typeof error === 'string' ? error : error?.message || '')),
     isAutoRunLockedState: () => false,
     isHotmailProvider: () => false,
     isLocalhostOAuthCallbackUrl: () => true,
@@ -194,4 +201,28 @@ test('message router marks step 3 failed when post-submit finalize fails', async
   ]);
   assert.equal(events.logs.some(({ message }) => /步骤 3 失败：步骤 3 提交后仍停留在密码页。/.test(message)), true);
   assert.deepStrictEqual(response, { ok: true, error: '步骤 3 提交后仍停留在密码页。' });
+});
+
+test('message router stops the flow and surfaces cloudflare security block errors', async () => {
+  const { router, events } = createRouter();
+
+  const response = await router.handleMessage({
+    type: 'STEP_ERROR',
+    step: 7,
+    source: 'signup-page',
+    payload: {},
+    error: 'CF_SECURITY_BLOCKED::您已触发Cloudflare 安全防护系统',
+  }, {});
+
+  assert.deepStrictEqual(events.securityBlocks, ['CF_SECURITY_BLOCKED::您已触发Cloudflare 安全防护系统']);
+  assert.deepStrictEqual(events.notifyErrors, [
+    {
+      step: 7,
+      error: '流程已被用户停止。',
+    },
+  ]);
+  assert.deepStrictEqual(response, {
+    ok: true,
+    error: '您已触发Cloudflare 安全防护系统',
+  });
 });

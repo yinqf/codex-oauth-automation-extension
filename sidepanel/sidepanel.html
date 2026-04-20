@@ -16,13 +16,17 @@
 <body>
   <header>
     <div class="header-left">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-        stroke-linecap="round" stroke-linejoin="round">
-        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-      </svg>
+      <button id="btn-repo-home" class="header-icon-link" type="button" aria-label="打开 GitHub 仓库"
+        title="打开 GitHub 仓库">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+        </svg>
+      </button>
       <div class="header-version-block">
         <div class="header-version-main">
-          <div id="extension-update-status" class="header-version-title">Pro0.0</div>
+          <button id="extension-update-status" class="header-version-title header-version-link" type="button"
+            aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">Pro0.0</button>
           <button id="btn-release-log" class="header-link-btn" type="button" hidden>更新日志</button>
         </div>
         <span id="extension-version-meta" class="header-version-meta" hidden></span>
@@ -30,6 +34,8 @@
     </div>
     <div class="header-btns">
       <div class="run-group">
+        <button id="btn-contribution-mode" class="btn btn-outline btn-sm btn-contribution-mode" type="button"
+          aria-pressed="false" title="进入贡献模式">贡献</button>
         <input type="number" id="input-run-count" class="run-count-input" value="1" min="1" max="50" title="运行次数" />
         <button id="btn-auto-run" class="btn btn-success" title="自动执行全部步骤">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -98,6 +104,37 @@
           <option value="sub2api">SUB2API</option>
         </select>
       </div>
+      <div id="contribution-mode-panel" class="contribution-mode-panel" hidden>
+        <div class="contribution-mode-panel-header">
+          <span class="section-label">贡献模式</span>
+          <span class="contribution-mode-badge">CPA</span>
+        </div>
+        <p id="contribution-mode-text" class="contribution-mode-text">当前账号将用于支持项目维护。扩展会自动申请贡献登录地址并持续跟踪授权状态；如检测到回调地址，会自动提交，无需手动复制。</p>
+        <div class="data-row contribution-mode-field">
+          <span class="data-label">贡献昵称</span>
+          <input type="text" id="input-contribution-nickname" class="data-input" placeholder="可留空，默认使用当前邮箱" />
+        </div>
+        <div class="data-row contribution-mode-field">
+          <span class="data-label">QQ</span>
+          <input type="text" id="input-contribution-qq" class="data-input" inputmode="numeric" placeholder="可留空，只能填写数字" />
+        </div>
+        <div class="contribution-mode-status-grid">
+          <div class="contribution-mode-status-card">
+            <span class="contribution-mode-status-label">OAUTH</span>
+            <span id="contribution-oauth-status" class="contribution-mode-status-value">未生成登录地址</span>
+          </div>
+          <div class="contribution-mode-status-card">
+            <span class="contribution-mode-status-label">回调</span>
+            <span id="contribution-callback-status" class="contribution-mode-status-value">等待回调</span>
+          </div>
+        </div>
+        <div id="contribution-mode-summary" class="contribution-mode-summary">等待开始贡献</div>
+        <div class="contribution-mode-actions">
+          <button id="btn-start-contribution" class="btn btn-primary btn-sm" type="button">开始贡献</button>
+          <button id="btn-open-contribution-upload" class="btn btn-outline btn-sm" type="button">已有认证文件？前往上传</button>
+          <button id="btn-exit-contribution-mode" class="btn btn-ghost btn-sm" type="button">退出贡献模式</button>
+        </div>
+      </div>
       <div class="data-row" id="row-vps-url">
         <span class="data-label">CPA</span>
         <div class="input-with-icon">
@@ -123,13 +160,6 @@
           <button type="button" class="choice-btn" data-local-cpa-step9-mode="bypass">跳过第10步</button>
         </div>
       </div>
-      <div class="data-row" id="row-cpa-callback-mode">
-        <span class="data-label">CPA回调</span>
-        <div id="cpa-callback-mode-group" class="choice-group" role="group" aria-label="CPA 回调阶段">
-          <button type="button" class="choice-btn" data-cpa-callback-mode="step7">第七步回调</button>
-          <button type="button" class="choice-btn" data-cpa-callback-mode="step9">第九步回调</button>
-        </div>
-      </div>
       <div class="data-row" id="row-sub2api-url" style="display:none;">
         <span class="data-label">SUB2API</span>
         <input type="text" id="input-sub2api-url" class="data-input"
@@ -147,7 +177,12 @@
         <span class="data-label">分组</span>
         <input type="text" id="input-sub2api-group" class="data-input" placeholder="默认 codex" />
       </div>
-      <div class="data-row">
+      <div class="data-row" id="row-sub2api-default-proxy" style="display:none;">
+        <span class="data-label">默认代理</span>
+        <input type="text" id="input-sub2api-default-proxy" class="data-input"
+          placeholder="留空则不使用代理；或填写代理名称 / ID" />
+      </div>
+      <div class="data-row" id="row-custom-password">
         <span class="data-label">账户密码</span>
         <div class="input-with-icon">
           <input type="password" id="input-password" class="data-input data-input-with-icon"
@@ -302,16 +337,21 @@
           </div>
         </div>
       </div>
-      <div class="data-row">
+      <div class="data-row" id="row-account-run-history-text-enabled">
         <span class="data-label">本地同步</span>
-        <div class="data-inline auto-delay-inline">
+        <div class="data-inline">
           <label class="toggle-switch" for="input-account-run-history-text-enabled">
             <input type="checkbox" id="input-account-run-history-text-enabled" />
             <span class="toggle-switch-track" aria-hidden="true">
               <span class="toggle-switch-thumb"></span>
             </span>
           </label>
-          <div class="timing-field timing-field-right setting-inline-right">
+        </div>
+      </div>
+      <div class="data-row" id="row-verification-resend-count">
+        <span class="data-label">验证码</span>
+        <div class="data-inline">
+          <div class="timing-field timing-field-labeled timing-field-right setting-inline-right">
             <span class="auto-delay-caption">验证码重发</span>
             <div class="auto-delay-controls">
               <input type="number" id="input-verification-resend-count" class="data-input auto-delay-input" value="4"
@@ -585,11 +625,17 @@
           <span id="account-records-meta" class="account-records-panel-meta">暂无邮箱记录</span>
         </div>
         <div class="account-records-panel-actions">
-          <button id="btn-clear-account-records" class="btn btn-ghost btn-xs" type="button">清理记录</button>
           <button id="btn-close-account-records" class="modal-close" type="button" aria-label="关闭">×</button>
         </div>
       </div>
-      <div id="account-records-stats" class="account-records-stats"></div>
+      <div class="account-records-toolbar">
+        <div id="account-records-stats" class="account-records-stats" role="group" aria-label="邮箱记录筛选"></div>
+        <div class="account-records-toolbar-actions">
+          <button id="btn-toggle-account-records-selection" class="btn btn-ghost btn-xs" type="button">多选</button>
+          <button id="btn-delete-selected-account-records" class="btn btn-ghost btn-xs" type="button" hidden disabled>删除选中</button>
+          <button id="btn-clear-account-records" class="btn btn-ghost btn-xs" type="button">清理记录</button>
+        </div>
+      </div>
       <div id="account-records-list" class="account-records-list"></div>
       <div class="account-records-pagination">
         <button id="btn-account-records-prev" class="btn btn-outline btn-xs" type="button">上一页</button>
@@ -632,6 +678,7 @@
   <script src="hotmail-manager.js"></script>
   <script src="icloud-manager.js"></script>
   <script src="luckmail-manager.js"></script>
+  <script src="contribution-mode.js"></script>
   <script src="account-records-manager.js"></script>
   <script src="sidepanel.js"></script>
 </body>

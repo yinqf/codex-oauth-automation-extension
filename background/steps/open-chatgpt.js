@@ -5,12 +5,12 @@
     const {
       addLog,
       completeStepFromBackground,
-      ensureSignupEntryPageReady,
+      openSignupEntryTab,
     } = deps;
 
     async function executeStep1() {
       await addLog('步骤 1：正在打开 ChatGPT 官网...');
-      await ensureSignupEntryPageReady(1);
+      await openSignupEntryTab(1);
       await completeStepFromBackground(1, {});
     }
 

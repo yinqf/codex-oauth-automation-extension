@@ -11,7 +11,44 @@
     const displayTimeZone = constants.displayTimeZone || 'Asia/Shanghai';
     const pageSize = Math.max(1, Math.floor(Number(constants.pageSize) || 10));
 
+    const FILTER_CONFIG = {
+      all: {
+        label: '总',
+        className: '',
+        matches: () => true,
+        metaLabel: '全部',
+      },
+      success: {
+        label: '成',
+        className: 'is-success',
+        matches: (record) => record.finalStatus === 'success',
+        metaLabel: '成功',
+      },
+      failed: {
+        label: '失',
+        className: 'is-failed',
+        matches: (record) => record.finalStatus === 'failed',
+        metaLabel: '失败',
+      },
+      stopped: {
+        label: '停',
+        className: 'is-stopped',
+        matches: (record) => record.finalStatus === 'stopped',
+        metaLabel: '停止',
+      },
+      retry: {
+        label: '重试',
+        className: 'is-retry',
+        matches: (record) => normalizeRetryCount(record.retryCount) > 0,
+        metaLabel: '重试',
+      },
+    };
+
     let currentPage = 1;
+    let activeFilter = 'all';
+    let selectionMode = false;
+    let eventsBound = false;
+    const selectedRecordIds = new Set();
 
     function escapeHtml(value) {
       if (typeof helpers.escapeHtml === 'function') {
@@ -25,6 +62,17 @@
       return Number.isFinite(timestamp) ? timestamp : 0;
     }
 
+    function normalizeRetryCount(value) {
+      const count = Math.floor(Number(value) || 0);
+      return count > 0 ? count : 0;
+    }
+
+    function buildRecordId(record = {}) {
+      return String(record.recordId || record.email || '')
+        .trim()
+        .toLowerCase();
+    }
+
     function getAccountRunRecords(currentState = state.getLatestState()) {
       return (Array.isArray(currentState?.accountRunHistory) ? currentState.accountRunHistory : [])
         .filter((item) => item && typeof item === 'object')
@@ -34,18 +82,26 @@
 
     function summarizeAccountRunHistory(records = []) {
       return records.reduce((summary, record) => {
+        const retryCount = normalizeRetryCount(record.retryCount);
         summary.total += 1;
         if (record.finalStatus === 'success') {
           summary.success += 1;
         } else if (record.finalStatus === 'failed') {
           summary.failed += 1;
+        } else if (record.finalStatus === 'stopped') {
+          summary.stopped += 1;
         }
-        summary.retryTotal += Math.max(0, Math.floor(Number(record.retryCount) || 0));
+        if (retryCount > 0) {
+          summary.retryRecordCount += 1;
+        }
+        summary.retryTotal += retryCount;
         return summary;
       }, {
         total: 0,
         success: 0,
         failed: 0,
+        stopped: 0,
+        retryRecordCount: 0,
         retryTotal: 0,
       });
     }
@@ -57,7 +113,7 @@
       }
 
       const now = new Date();
-      const sameYear = date.getFullYear() == now.getFullYear();
+      const sameYear = date.getFullYear() === now.getFullYear();
       const sameDay = date.toDateString() === now.toDateString();
 
       if (sameDay) {
@@ -81,9 +137,13 @@
     }
 
     function getStatusMeta(record = {}) {
-      return record.finalStatus === 'success'
-        ? { kind: 'success', label: '成功' }
-        : { kind: 'failed', label: '失败' };
+      if (record.finalStatus === 'success') {
+        return { kind: 'success', label: '成功' };
+      }
+      if (record.finalStatus === 'stopped') {
+        return { kind: 'stopped', label: '停止' };
+      }
+      return { kind: 'failed', label: '失败' };
     }
 
     function getRecordSummaryText(record = {}) {
@@ -94,28 +154,163 @@
       return String(record.failureLabel || '').trim() || '流程失败';
     }
 
-    function createStatChip(label, value, className = '') {
-      return `<span class="account-records-stat${className ? ` ${className}` : ''}"><strong>${escapeHtml(String(value))}</strong>${escapeHtml(label)}</span>`;
+    function getFilterConfig(filterKey = activeFilter) {
+      return FILTER_CONFIG[filterKey] || FILTER_CONFIG.all;
     }
 
-    function updateHeader(records) {
-      if (!dom.accountRecordsMeta || !dom.accountRecordsStats) {
+    function getFilteredRecords(records = []) {
+      const filterConfig = getFilterConfig(activeFilter);
+      return records.filter((record) => filterConfig.matches(record));
+    }
+
+    function pruneSelectedRecordIds(records = []) {
+      const availableIds = new Set(records.map((record) => buildRecordId(record)).filter(Boolean));
+      for (const recordId of Array.from(selectedRecordIds)) {
+        if (!availableIds.has(recordId)) {
+          selectedRecordIds.delete(recordId);
+        }
+      }
+    }
+
+    function setNodeHidden(node, hidden) {
+      if (node) {
+        node.hidden = Boolean(hidden);
+      }
+    }
+
+    function setNodeDisabled(node, disabled) {
+      if (node) {
+        node.disabled = Boolean(disabled);
+      }
+    }
+
+    function toggleNodeClass(node, className, enabled) {
+      if (!node || !className) {
+        return;
+      }
+      if (node.classList && typeof node.classList.toggle === 'function') {
+        node.classList.toggle(className, Boolean(enabled));
+      }
+    }
+
+    function setNodeText(node, value) {
+      if (node) {
+        node.textContent = String(value || '');
+      }
+    }
+
+    function setNodeAttr(node, name, value) {
+      if (!node || !name) {
+        return;
+      }
+      if (typeof node.setAttribute === 'function') {
+        node.setAttribute(name, String(value));
+        return;
+      }
+      node[name] = value;
+    }
+
+    function getDatasetValue(node, attrName) {
+      if (!node || !attrName) {
+        return '';
+      }
+
+      if (typeof node.getAttribute === 'function') {
+        return String(node.getAttribute(attrName) || '');
+      }
+
+      const dataKey = attrName
+        .replace(/^data-/, '')
+        .replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+      return String(node.dataset?.[dataKey] || '');
+    }
+
+    function findClosest(target, selector) {
+      if (!target || typeof target.closest !== 'function') {
+        return null;
+      }
+      try {
+        return target.closest(selector);
+      } catch {
+        return null;
+      }
+    }
+
+    function createStatChip(filterKey, value) {
+      const filterConfig = getFilterConfig(filterKey);
+      const classNames = [
+        'account-records-stat',
+        filterConfig.className,
+        activeFilter === filterKey ? 'is-active' : '',
+      ].filter(Boolean).join(' ');
+
+      return `
+        <button
+          type="button"
+          class="${classNames}"
+          data-account-record-filter="${escapeHtml(filterKey)}"
+          aria-pressed="${activeFilter === filterKey ? 'true' : 'false'}"
+        >
+          <strong>${escapeHtml(String(value))}</strong>${escapeHtml(filterConfig.label)}
+        </button>
+      `;
+    }
+
+    function updateHeader(allRecords, filteredRecords) {
+      if (!dom.accountRecordsMeta) {
         return;
       }
 
-      if (!records.length) {
+      if (!allRecords.length) {
         dom.accountRecordsMeta.textContent = '暂无邮箱记录';
-      } else {
-        dom.accountRecordsMeta.textContent = `共 ${records.length} 条，最近更新于 ${formatAccountRecordTime(records[0]?.finishedAt)}`;
+        return;
       }
 
-      const summary = summarizeAccountRunHistory(records);
+      const latestTime = formatAccountRecordTime(allRecords[0]?.finishedAt);
+      let metaText = `共 ${allRecords.length} 条，最近更新于 ${latestTime}`;
+
+      if (activeFilter !== 'all') {
+        metaText = `共 ${allRecords.length} 条，当前筛选 ${getFilterConfig(activeFilter).metaLabel} ${filteredRecords.length} 条，最近更新于 ${latestTime}`;
+      }
+
+      if (selectionMode) {
+        metaText += `，已选 ${selectedRecordIds.size} 条`;
+      }
+
+      dom.accountRecordsMeta.textContent = metaText;
+    }
+
+    function updateStats(allRecords) {
+      if (!dom.accountRecordsStats) {
+        return;
+      }
+
+      const summary = summarizeAccountRunHistory(allRecords);
       dom.accountRecordsStats.innerHTML = [
-        createStatChip('总', summary.total),
-        createStatChip('成', summary.success, 'is-success'),
-        createStatChip('失', summary.failed, 'is-failed'),
-        createStatChip('重试', summary.retryTotal, 'is-retry'),
+        createStatChip('all', summary.total),
+        createStatChip('success', summary.success),
+        createStatChip('failed', summary.failed),
+        createStatChip('stopped', summary.stopped),
+        createStatChip('retry', summary.retryTotal),
       ].join('');
+    }
+
+    function updateToolbarState(allRecords) {
+      const totalRecords = allRecords.length;
+      setNodeDisabled(dom.btnClearAccountRecords, totalRecords === 0);
+      setNodeDisabled(dom.btnToggleAccountRecordsSelection, totalRecords === 0);
+      setNodeHidden(dom.btnClearAccountRecords, selectionMode);
+      toggleNodeClass(dom.btnToggleAccountRecordsSelection, 'is-active', selectionMode);
+      setNodeAttr(dom.btnToggleAccountRecordsSelection, 'aria-pressed', selectionMode ? 'true' : 'false');
+      setNodeText(dom.btnToggleAccountRecordsSelection, selectionMode ? '取消多选' : '多选');
+
+      const selectedCount = selectedRecordIds.size;
+      setNodeHidden(dom.btnDeleteSelectedAccountRecords, !selectionMode);
+      setNodeDisabled(dom.btnDeleteSelectedAccountRecords, selectedCount === 0);
+      setNodeText(
+        dom.btnDeleteSelectedAccountRecords,
+        selectedCount > 0 ? `删除选中(${selectedCount})` : '删除选中'
+      );
     }
 
     function updatePagination(totalRecords) {
@@ -128,44 +323,73 @@
         currentPage = 1;
       }
 
-      if (dom.accountRecordsPageLabel) {
-        dom.accountRecordsPageLabel.textContent = totalPages > 0 ? `${currentPage} / ${totalPages}` : '0 / 0';
-      }
-      if (dom.btnAccountRecordsPrev) {
-        dom.btnAccountRecordsPrev.disabled = totalPages <= 1 || currentPage <= 1;
-      }
-      if (dom.btnAccountRecordsNext) {
-        dom.btnAccountRecordsNext.disabled = totalPages <= 1 || currentPage >= totalPages;
-      }
-      if (dom.btnClearAccountRecords) {
-        dom.btnClearAccountRecords.disabled = totalRecords === 0;
-      }
+      setNodeText(dom.accountRecordsPageLabel, totalPages > 0 ? `${currentPage} / ${totalPages}` : '0 / 0');
+      setNodeDisabled(dom.btnAccountRecordsPrev, totalPages <= 1 || currentPage <= 1);
+      setNodeDisabled(dom.btnAccountRecordsNext, totalPages <= 1 || currentPage >= totalPages);
 
       return totalPages;
     }
 
-    function renderRecordList(records = []) {
+    function renderEmptyState(allRecords) {
       if (!dom.accountRecordsList) {
         return;
       }
 
-      const totalPages = updatePagination(records.length);
-      if (!records.length) {
-        dom.accountRecordsList.innerHTML = '<div class="account-records-empty">暂无邮箱记录。</div>';
+      const message = allRecords.length
+        ? `当前筛选“${getFilterConfig(activeFilter).metaLabel}”下暂无记录`
+        : '暂无邮箱记录';
+      dom.accountRecordsList.innerHTML = `<div class="account-records-empty">${escapeHtml(message)}</div>`;
+    }
+
+    function renderRecordList(allRecords, filteredRecords) {
+      if (!dom.accountRecordsList) {
+        return;
+      }
+
+      const totalPages = updatePagination(filteredRecords.length);
+      if (!filteredRecords.length) {
+        renderEmptyState(allRecords);
         return;
       }
 
       const startIndex = (currentPage - 1) * pageSize;
-      const visibleRecords = records.slice(startIndex, startIndex + pageSize);
+      const visibleRecords = filteredRecords.slice(startIndex, startIndex + pageSize);
 
       dom.accountRecordsList.innerHTML = visibleRecords.map((record) => {
+        const recordId = buildRecordId(record);
         const statusMeta = getStatusMeta(record);
         const summaryText = getRecordSummaryText(record);
-        const retryCount = Math.max(0, Math.floor(Number(record.retryCount) || 0));
+        const retryCount = normalizeRetryCount(record.retryCount);
+        const isSelected = selectedRecordIds.has(recordId);
+        const itemClassNames = [
+          'account-record-item',
+          `is-${statusMeta.kind}`,
+          selectionMode ? 'is-selectable' : '',
+          isSelected ? 'is-selected' : '',
+        ].filter(Boolean).join(' ');
+        const selectionMarkup = selectionMode
+          ? `
+              <label class="account-record-item-check" data-account-record-toggle="${escapeHtml(recordId)}">
+                <input
+                  type="checkbox"
+                  data-account-record-checkbox="${escapeHtml(recordId)}"
+                  ${isSelected ? 'checked' : ''}
+                />
+              </label>
+            `
+          : '';
+
         return `
-          <div class="account-record-item is-${escapeHtml(statusMeta.kind)}" title="${escapeHtml(String(record.email || ''))}">
+          <div
+            class="${itemClassNames}"
+            data-account-record-id="${escapeHtml(recordId)}"
+            title="${escapeHtml(String(record.email || ''))}"
+          >
             <div class="account-record-item-top">
-              <div class="account-record-item-email mono">${escapeHtml(String(record.email || '').trim() || '(空邮箱)')}</div>
+              <div class="account-record-item-email-row">
+                ${selectionMarkup}
+                <div class="account-record-item-email mono">${escapeHtml(String(record.email || '').trim() || '(空邮箱)')}</div>
+              </div>
               <div class="account-record-item-side">
                 <span class="account-record-item-status">${escapeHtml(statusMeta.label)}</span>
                 <span class="account-record-item-time mono">${escapeHtml(formatAccountRecordTime(record.finishedAt))}</span>
@@ -179,27 +403,67 @@
         `;
       }).join('');
 
-      if (totalPages <= 1 && dom.accountRecordsPageLabel) {
-        dom.accountRecordsPageLabel.textContent = '1 / 1';
+      if (totalPages <= 1) {
+        setNodeText(dom.accountRecordsPageLabel, '1 / 1');
       }
     }
 
     function render(currentState = state.getLatestState()) {
-      const records = getAccountRunRecords(currentState);
-      updateHeader(records);
-      renderRecordList(records);
+      const allRecords = getAccountRunRecords(currentState);
+      pruneSelectedRecordIds(allRecords);
+
+      if (!allRecords.length) {
+        selectionMode = false;
+      }
+
+      const filteredRecords = getFilteredRecords(allRecords);
+      updateHeader(allRecords, filteredRecords);
+      updateStats(allRecords);
+      updateToolbarState(allRecords);
+      renderRecordList(allRecords, filteredRecords);
     }
 
     function openPanel() {
-      if (dom.accountRecordsOverlay) {
-        dom.accountRecordsOverlay.hidden = false;
-      }
+      setNodeHidden(dom.accountRecordsOverlay, false);
       render();
     }
 
     function closePanel() {
-      if (dom.accountRecordsOverlay) {
-        dom.accountRecordsOverlay.hidden = true;
+      setNodeHidden(dom.accountRecordsOverlay, true);
+    }
+
+    function resetSelection() {
+      selectedRecordIds.clear();
+    }
+
+    function setSelectionMode(nextValue) {
+      const nextSelectionMode = Boolean(nextValue);
+      if (!nextSelectionMode) {
+        resetSelection();
+      }
+      selectionMode = nextSelectionMode;
+      currentPage = 1;
+      render();
+    }
+
+    function toggleSelectionMode() {
+      setSelectionMode(!selectionMode);
+    }
+
+    function toggleRecordSelection(recordId, forceSelected = null) {
+      const normalizedRecordId = String(recordId || '').trim().toLowerCase();
+      if (!selectionMode || !normalizedRecordId) {
+        return;
+      }
+
+      const shouldSelect = forceSelected === null
+        ? !selectedRecordIds.has(normalizedRecordId)
+        : Boolean(forceSelected);
+
+      if (shouldSelect) {
+        selectedRecordIds.add(normalizedRecordId);
+      } else {
+        selectedRecordIds.delete(normalizedRecordId);
       }
     }
 
@@ -228,12 +492,98 @@
         throw new Error(response.error);
       }
 
+      activeFilter = 'all';
       currentPage = 1;
+      selectionMode = false;
+      resetSelection();
       state.syncLatestState({ accountRunHistory: [] });
-      helpers.showToast?.(`已清理 ${Math.max(0, Number(response?.clearedCount) || 0)} 条邮箱记录`, 'success', 2200);
+      helpers.showToast?.(`已清理 ${Math.max(0, Number(response?.clearedCount) || 0)} 条邮箱记录。`, 'success', 2200);
+    }
+
+    async function deleteSelectedRecords() {
+      const recordIds = Array.from(selectedRecordIds).filter(Boolean);
+      if (!recordIds.length) {
+        helpers.showToast?.('请先勾选要删除的邮箱记录。', 'warn', 1800);
+        return;
+      }
+
+      const confirmed = await helpers.openConfirmModal({
+        title: '删除选中记录',
+        message: `确认删除选中的 ${recordIds.length} 条邮箱记录吗？该操作会同步更新本地 helper 快照。`,
+        confirmLabel: '确认删除',
+        confirmVariant: 'btn-danger',
+      });
+      if (!confirmed) {
+        return;
+      }
+
+      const response = await runtime.sendMessage({
+        type: 'DELETE_ACCOUNT_RUN_HISTORY_RECORDS',
+        source: 'sidepanel',
+        payload: {
+          recordIds,
+        },
+      });
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+
+      const existingRecords = getAccountRunRecords();
+      const selectedIds = new Set(recordIds);
+      const nextRecords = existingRecords.filter((record) => !selectedIds.has(buildRecordId(record)));
+
+      resetSelection();
+      state.syncLatestState({ accountRunHistory: nextRecords });
+      helpers.showToast?.(`已删除 ${Math.max(0, Number(response?.deletedCount) || 0)} 条邮箱记录。`, 'success', 2200);
+    }
+
+    function handleStatsClick(event) {
+      const filterNode = findClosest(event?.target, '[data-account-record-filter]');
+      if (!filterNode) {
+        return;
+      }
+
+      const nextFilter = getDatasetValue(filterNode, 'data-account-record-filter');
+      if (!FILTER_CONFIG[nextFilter]) {
+        return;
+      }
+
+      activeFilter = activeFilter === nextFilter && nextFilter !== 'all'
+        ? 'all'
+        : nextFilter;
+      currentPage = 1;
+      render();
+    }
+
+    function handleRecordListClick(event) {
+      if (!selectionMode) {
+        return;
+      }
+
+      const toggleNode = findClosest(event?.target, '[data-account-record-toggle]');
+      if (toggleNode) {
+        const recordId = getDatasetValue(toggleNode, 'data-account-record-toggle');
+        const explicitChecked = typeof event?.target?.checked === 'boolean' ? event.target.checked : null;
+        toggleRecordSelection(recordId, explicitChecked);
+        render();
+        return;
+      }
+
+      const recordNode = findClosest(event?.target, '[data-account-record-id]');
+      if (!recordNode) {
+        return;
+      }
+
+      toggleRecordSelection(getDatasetValue(recordNode, 'data-account-record-id'));
+      render();
     }
 
     function bindEvents() {
+      if (eventsBound) {
+        return;
+      }
+      eventsBound = true;
+
       dom.btnOpenAccountRecords?.addEventListener('click', () => {
         openPanel();
       });
@@ -244,6 +594,12 @@
         if (event.target === dom.accountRecordsOverlay) {
           closePanel();
         }
+      });
+      dom.accountRecordsStats?.addEventListener('click', (event) => {
+        handleStatsClick(event);
+      });
+      dom.accountRecordsList?.addEventListener('click', (event) => {
+        handleRecordListClick(event);
       });
       dom.btnAccountRecordsPrev?.addEventListener('click', () => {
         if (currentPage <= 1) {
@@ -256,26 +612,45 @@
         currentPage += 1;
         render();
       });
-      dom.btnClearAccountRecords?.addEventListener('click', () => {
-        clearRecords().catch((error) => {
+      dom.btnToggleAccountRecordsSelection?.addEventListener('click', () => {
+        toggleSelectionMode();
+      });
+      dom.btnDeleteSelectedAccountRecords?.addEventListener('click', async () => {
+        try {
+          await deleteSelectedRecords();
+        } catch (error) {
+          helpers.showToast?.(`删除邮箱记录失败：${error.message}`, 'error');
+        }
+      });
+      dom.btnClearAccountRecords?.addEventListener('click', async () => {
+        try {
+          await clearRecords();
+        } catch (error) {
           helpers.showToast?.(`清理邮箱记录失败：${error.message}`, 'error');
-        });
+        }
       });
     }
 
     function reset() {
       currentPage = 1;
+      activeFilter = 'all';
+      selectionMode = false;
+      resetSelection();
       closePanel();
       render();
     }
 
     return {
       bindEvents,
+      clearRecords,
       closePanel,
+      deleteSelectedRecords,
       openPanel,
       render,
       reset,
+      setSelectionMode,
       summarizeAccountRunHistory,
+      toggleSelectionMode,
     };
   }
 

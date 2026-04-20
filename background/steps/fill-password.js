@@ -30,7 +30,7 @@
       await setPasswordState(password);
 
       const accounts = state.accounts || [];
-      accounts.push({ email: resolvedEmail, password, createdAt: new Date().toISOString() });
+      accounts.push({ email: resolvedEmail, createdAt: new Date().toISOString() });
       await setState({ accounts });
 
       await chrome.tabs.update(signupTabId, { active: true });

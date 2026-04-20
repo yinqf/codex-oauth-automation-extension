@@ -12,11 +12,72 @@
       LOG_PREFIX,
       matchesSourceUrlFamily,
       setState,
+      sleepWithStop,
       STOP_ERROR_MESSAGE,
       throwIfStopped,
     } = deps;
 
     const pendingCommands = new Map();
+
+    async function sleepOrStop(ms) {
+      if (typeof sleepWithStop === 'function') {
+        await sleepWithStop(ms);
+        return;
+      }
+
+      const start = Date.now();
+      while (Date.now() - start < ms) {
+        throwIfStopped();
+        await new Promise((resolve) => setTimeout(resolve, Math.min(100, ms - (Date.now() - start))));
+      }
+    }
+
+    function waitForTabUpdateComplete(tabId, timeoutMs = 30000) {
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        let stopTimer = null;
+
+        const cleanup = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          clearTimeout(stopTimer);
+          chrome.tabs.onUpdated.removeListener(listener);
+        };
+
+        const resolveSafely = () => {
+          cleanup();
+          resolve();
+        };
+
+        const rejectSafely = (error) => {
+          cleanup();
+          reject(error);
+        };
+
+        const listener = (updatedTabId, info) => {
+          if (updatedTabId === tabId && info.status === 'complete') {
+            resolveSafely();
+          }
+        };
+
+        const timer = setTimeout(resolveSafely, timeoutMs);
+        chrome.tabs.onUpdated.addListener(listener);
+
+        const pollStop = () => {
+          if (settled) return;
+          try {
+            throwIfStopped();
+          } catch (error) {
+            rejectSafely(error);
+            return;
+          }
+          stopTimer = setTimeout(pollStop, 100);
+        };
+
+        pollStop();
+      });
+    }
 
     async function getTabRegistry() {
       const state = await getState();
@@ -179,7 +240,7 @@
         } catch {
           return null;
         }
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        await sleepOrStop(retryDelayMs);
       }
       return null;
     }
@@ -197,7 +258,7 @@
         } catch {
           return null;
         }
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        await sleepOrStop(retryDelayMs);
       }
       return null;
     }
@@ -215,7 +276,7 @@
         } catch {
           return null;
         }
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        await sleepOrStop(retryDelayMs);
       }
 
       try {
@@ -296,7 +357,7 @@
           logged = true;
         }
 
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        await sleepOrStop(retryDelayMs);
       }
 
       throw lastError || new Error(`${getSourceLabel(source)} 内容脚本长时间未就绪。`);
@@ -418,17 +479,7 @@
             if (registry[source]) registry[source].ready = false;
             await setState({ tabRegistry: registry });
             await chrome.tabs.reload(tabId);
-            await new Promise((resolve) => {
-              const timer = setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 30000);
-              const listener = (tid, info) => {
-                if (tid === tabId && info.status === 'complete') {
-                  chrome.tabs.onUpdated.removeListener(listener);
-                  clearTimeout(timer);
-                  resolve();
-                }
-              };
-              chrome.tabs.onUpdated.addListener(listener);
-            });
+            await waitForTabUpdateComplete(tabId);
           }
 
           if (options.inject) {
@@ -447,7 +498,7 @@
               target: { tabId },
               files: options.inject,
             });
-            await new Promise((resolve) => setTimeout(resolve, 500));
+            await sleepOrStop(500);
           }
 
           await rememberSourceLastUrl(source, url);
@@ -458,17 +509,7 @@
         await setState({ tabRegistry: registry });
         await chrome.tabs.update(tabId, { url, active: true });
 
-        await new Promise((resolve) => {
-          const timer = setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 30000);
-          const listener = (tid, info) => {
-            if (tid === tabId && info.status === 'complete') {
-              chrome.tabs.onUpdated.removeListener(listener);
-              clearTimeout(timer);
-              resolve();
-            }
-          };
-          chrome.tabs.onUpdated.addListener(listener);
-        });
+        await waitForTabUpdateComplete(tabId);
 
         if (options.inject) {
           if (options.injectSource) {
@@ -486,7 +527,7 @@
           });
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await sleepOrStop(500);
         await rememberSourceLastUrl(source, url);
         return tabId;
       }
@@ -495,17 +536,7 @@
       const tab = await chrome.tabs.create({ url, active: true });
 
       if (options.inject) {
-        await new Promise((resolve) => {
-          const timer = setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 30000);
-          const listener = (tabId, info) => {
-            if (tabId === tab.id && info.status === 'complete') {
-              chrome.tabs.onUpdated.removeListener(listener);
-              clearTimeout(timer);
-              resolve();
-            }
-          };
-          chrome.tabs.onUpdated.addListener(listener);
-        });
+        await waitForTabUpdateComplete(tab.id);
         if (options.injectSource) {
           await chrome.scripting.executeScript({
             target: { tabId: tab.id },
@@ -580,7 +611,7 @@
             logged = true;
           }
 
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+          await sleepOrStop(retryDelayMs);
         }
       }
 
@@ -628,7 +659,7 @@
             injectSource: mail.injectSource,
             reloadIfSameUrl: true,
           });
-          await new Promise((resolve) => setTimeout(resolve, 800));
+          await sleepOrStop(800);
         }
       }
 
