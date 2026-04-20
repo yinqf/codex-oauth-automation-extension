@@ -155,6 +155,20 @@
           <button id="btn-toggle-password" class="input-icon-btn" type="button" aria-label="显示密码" title="显示密码"></button>
         </div>
       </div>
+      <div class="data-row" id="row-cpa-upload">
+        <span class="data-label">CPA账号</span>
+        <textarea id="input-cpa-upload-accounts" class="data-textarea mono" rows="4"
+          placeholder="每行一个：Codex邮箱----Codex密码----邮箱密码，可带第4段refreshToken（忽略）"></textarea>
+      </div>
+      <div class="data-row" id="row-cpa-upload-actions">
+        <span class="data-label">CPA上传</span>
+        <div class="data-inline">
+          <button id="btn-cpa-upload" class="btn btn-primary btn-sm data-inline-btn" type="button">
+            批量获取并回填 OAuth
+          </button>
+          <span id="cpa-upload-summary" class="data-hint"></span>
+        </div>
+      </div>
       <div class="data-row">
         <span class="data-label">邮箱服务</span>
         <div class="data-inline">

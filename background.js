@@ -3,6 +3,7 @@
 importScripts(
   'managed-alias-utils.js',
   'background/account-run-history.js',
+  'background/cpa-upload-flow.js',
   'background/panel-bridge.js',
   'background/generated-email-helpers.js',
   'background/signup-flow-helpers.js',
@@ -129,6 +130,7 @@ const GMAIL_PROVIDER = 'gmail';
 const HOTMAIL_PROVIDER = 'hotmail-api';
 const LUCKMAIL_PROVIDER = 'luckmail-api';
 const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
+const MS_LQQQ_PROVIDER = 'ms-lqqq';
 const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
@@ -239,6 +241,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   hotmailServiceMode: HOTMAIL_SERVICE_MODE_LOCAL,
   hotmailRemoteBaseUrl: DEFAULT_HOTMAIL_REMOTE_BASE_URL,
   hotmailLocalBaseUrl: DEFAULT_HOTMAIL_LOCAL_BASE_URL,
+  cpaUploadAccountsText: '',
   cloudflareDomain: '',
   cloudflareDomains: [],
   cloudflareTempEmailBaseUrl: '',
@@ -316,8 +319,14 @@ const DEFAULT_STATE = {
   autoRunCountdownNote: '',
   signupVerificationRequestedAt: null,
   loginVerificationRequestedAt: null,
+  oauthConsentReady: false,
   oauthFlowDeadlineAt: null,
   currentHotmailAccountId: null,
+  cpaUploadRunning: false,
+  cpaUploadCurrentLine: null,
+  cpaUploadCurrentEmail: null,
+  msLqqqMailPassword: '',
+  msLqqqMailUrl: '',
   preferredIcloudHost: '',
 };
 
@@ -3565,6 +3574,8 @@ function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
       return Boolean(reference) && candidate.origin === reference.origin && candidate.pathname.startsWith('/m/');
     case 'mail-2925':
       return candidate.hostname === '2925.com' || candidate.hostname === 'www.2925.com';
+    case 'ms-lqqq-mail':
+      return candidate.hostname === 'ms.lqqq.cc';
     case 'vps-panel':
       return Boolean(reference) && candidate.origin === reference.origin && candidate.pathname === reference.pathname;
     case 'sub2api-panel':
@@ -3730,6 +3741,7 @@ function getSourceLabel(source) {
     'qq-mail': 'QQ 邮箱',
     'mail-163': '163 邮箱',
     'mail-2925': '2925 邮箱',
+    'ms-lqqq-mail': 'ms.lqqq 邮箱',
     'inbucket-mail': 'Inbucket 邮箱',
     'duck-mail': 'Duck 邮箱',
     'hotmail-api': 'Hotmail（API对接/本地助手）',
@@ -4560,8 +4572,16 @@ async function handleStepData(step, payload) {
       }
       break;
     case 7:
-      if (payload.loginVerificationRequestedAt) {
-        await setState({ loginVerificationRequestedAt: payload.loginVerificationRequestedAt });
+      if (payload.directOAuthConsent) {
+        await setState({
+          oauthConsentReady: true,
+          loginVerificationRequestedAt: null,
+        });
+      } else if (payload.loginVerificationRequestedAt) {
+        await setState({
+          oauthConsentReady: false,
+          loginVerificationRequestedAt: payload.loginVerificationRequestedAt,
+        });
       }
       break;
     case 4:
@@ -4593,6 +4613,9 @@ async function handleStepData(step, payload) {
         await closeLocalhostCallbackTabs(payload.localhostUrl);
       }
       const latestState = await getState();
+      if (latestState.cpaUploadRunning) {
+        break;
+      }
       if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
         await patchHotmailAccount(latestState.currentHotmailAccountId, {
           used: true,
@@ -4684,7 +4707,7 @@ async function completeStepFromBackground(step, payload = {}) {
   await setStepStatus(step, 'completed');
   await addLog(`步骤 ${step} 已完成`, 'ok');
   await handleStepData(step, payload);
-  if (step === LAST_STEP_ID) {
+  if (step === LAST_STEP_ID && !completionState?.cpaUploadRunning) {
     await appendAndBroadcastAccountRunRecord('success', completionState);
   }
   notifyStepComplete(step, payload);
@@ -4696,7 +4719,7 @@ async function appendManualAccountRunRecordIfNeeded(status, stateOverride = null
   }
 
   const state = stateOverride || await getState();
-  if (isAutoRunLockedState(state)) {
+  if (isAutoRunLockedState(state) || state.cpaUploadRunning) {
     return null;
   }
 
@@ -5856,6 +5879,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   setStepStatus,
   skipAutoRunCountdown,
   skipStep,
+  startCpaUploadFlow,
   startAutoRunLoop,
   syncHotmailAccounts,
   testHotmailAccountMailAccess,
@@ -5964,6 +5988,22 @@ function getMailConfig(state) {
   }
   if (provider === CLOUDFLARE_TEMP_EMAIL_PROVIDER) {
     return { provider: CLOUDFLARE_TEMP_EMAIL_PROVIDER, label: 'Cloudflare Temp Email' };
+  }
+  if (provider === MS_LQQQ_PROVIDER) {
+    const email = String(state.email || '').trim();
+    const mailPassword = String(state.msLqqqMailPassword || '').trim();
+    const mailUrl = String(state.msLqqqMailUrl || '').trim();
+    if (!email || !mailPassword || !mailUrl) {
+      return { error: 'ms.lqqq.cc 邮箱配置缺失，请检查 CPA 上传账号格式。' };
+    }
+    return {
+      source: 'ms-lqqq-mail',
+      url: mailUrl,
+      label: `ms.lqqq 邮箱（${email}）`,
+      navigateOnReuse: true,
+      inject: ['content/utils.js', 'content/ms-lqqq-mail.js'],
+      injectSource: 'ms-lqqq-mail',
+    };
   }
   if (provider === '163') {
     return { source: 'mail-163', url: 'https://mail.163.com/js6/main.jsp?df=mail163_letter#module=mbox.ListModule%7C%7B%22fid%22%3A1%2C%22order%22%3A%22date%22%2C%22desc%22%3Atrue%7D', label: '163 邮箱' };
@@ -6780,6 +6820,22 @@ const step9Executor = self.MultiPageBackgroundStep9?.createStep9Executor({
 
 async function executeStep9(state) {
   return step9Executor.executeStep9(state);
+}
+
+const cpaUploadFlow = self.MultiPageBackgroundCpaUploadFlow?.createCpaUploadFlow({
+  addLog,
+  executeStepAndWait,
+  getPanelMode,
+  getState,
+  isStopError,
+  setEmailState,
+  setState,
+  setStepStatus,
+  throwIfStopped,
+});
+
+async function startCpaUploadFlow(payload = {}) {
+  return cpaUploadFlow.runCpaUpload(payload);
 }
 
 // ============================================================

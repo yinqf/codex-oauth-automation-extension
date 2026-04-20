@@ -158,6 +158,16 @@
         return;
       }
 
+      if (state.oauthConsentReady) {
+        await setState({
+          lastLoginCode: null,
+          loginVerificationRequestedAt: null,
+        });
+        await setStepStatus(8, 'skipped');
+        await addLog('步骤 8：当前账号登录后已直接进入 OAuth 授权页，无需获取登录验证码。', 'warn');
+        return;
+      }
+
       let currentState = state;
       let mailPollingAttempt = 1;
       let lastMailPollingError = null;

@@ -118,6 +118,8 @@
             && candidate.pathname.startsWith('/m/');
         case 'mail-2925':
           return candidate.hostname === '2925.com' || candidate.hostname === 'www.2925.com';
+        case 'ms-lqqq-mail':
+          return candidate.hostname === 'ms.lqqq.cc';
         case 'vps-panel':
           return Boolean(reference)
             && candidate.origin === reference.origin

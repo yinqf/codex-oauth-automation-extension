@@ -689,8 +689,22 @@ function getPageTextSnapshot() {
     .trim();
 }
 
+function getEmailsFromText(text) {
+  const matches = String(text || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+  return Array.from(new Set(matches.map((email) => email.trim().toLowerCase()).filter(Boolean)));
+}
+
 function getOAuthConsentForm() {
   return document.querySelector(OAUTH_CONSENT_FORM_SELECTOR);
+}
+
+function isOAuthConsentUrl(value = location.href) {
+  try {
+    const url = new URL(value, location.href);
+    return /\/sign-in-with-chatgpt\/[^/?#]+\/consent(?:[/?#]|$)/i.test(url.pathname);
+  } catch {
+    return /\/sign-in-with-chatgpt\/[^/?#]+\/consent(?:[/?#]|$)/i.test(String(value || ''));
+  }
 }
 
 function getPrimaryContinueButton() {
@@ -733,12 +747,19 @@ function getPrimaryContinueButton() {
 }
 
 function isOAuthConsentPage() {
+  const consentForm = getOAuthConsentForm();
+  const consentFormAction = consentForm?.getAttribute?.('action') || '';
+  const hasConsentRoute = isOAuthConsentUrl(location.href) || (consentFormAction && isOAuthConsentUrl(consentFormAction));
+  if (!hasConsentRoute && !consentForm) {
+    return false;
+  }
+
   const pageText = getPageTextSnapshot();
   if (OAUTH_CONSENT_PAGE_PATTERN.test(pageText)) {
     return true;
   }
 
-  if (getOAuthConsentForm()) {
+  if (consentForm) {
     return true;
   }
 
@@ -1049,6 +1070,7 @@ function getLoginSubmitButton({ allowDisabled = false } = {}) {
 }
 
 function inspectLoginAuthState() {
+  const pageText = getPageTextSnapshot();
   const retryState = getLoginTimeoutErrorPageState();
   const verificationTarget = getVerificationCodeTarget();
   const passwordInput = getLoginPasswordInput();
@@ -1059,6 +1081,7 @@ function inspectLoginAuthState() {
   const addPhonePage = isAddPhonePageReady();
   const consentReady = isStep8Ready();
   const oauthConsentPage = isOAuthConsentPage();
+  const consentEmails = oauthConsentPage ? getEmailsFromText(pageText) : [];
   const baseState = {
     state: 'unknown',
     url: location.href,
@@ -1076,6 +1099,7 @@ function inspectLoginAuthState() {
     addPhonePage,
     oauthConsentPage,
     consentReady,
+    consentEmails,
   };
 
   if (verificationTarget) {
@@ -1140,6 +1164,7 @@ function serializeLoginAuthState(snapshot) {
     addPhonePage: Boolean(snapshot?.addPhonePage),
     oauthConsentPage: Boolean(snapshot?.oauthConsentPage),
     consentReady: Boolean(snapshot?.consentReady),
+    consentEmails: Array.isArray(snapshot?.consentEmails) ? snapshot.consentEmails : [],
   };
 }
 
@@ -1170,7 +1195,7 @@ async function waitForKnownLoginAuthState(timeout = 15000) {
   while (Date.now() - start < timeout) {
     throwIfStopped();
     snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
-    if (snapshot.state !== 'unknown') {
+    if (snapshot.state !== 'unknown' || isStep6DirectOAuthConsent(snapshot)) {
       return snapshot;
     }
     await sleep(200);
@@ -1200,6 +1225,22 @@ async function waitForLoginVerificationPageReady(timeout = 10000) {
   );
 }
 
+function isStep6DirectOAuthConsent(snapshot, expectedEmail = '') {
+  const hasConsentState = Boolean(snapshot?.consentReady || snapshot?.oauthConsentPage || snapshot?.state === 'oauth_consent_page');
+  if (!hasConsentState) return false;
+
+  const snapshotUrl = snapshot?.url || location.href;
+  if (!isOAuthConsentUrl(snapshotUrl)) return false;
+
+  const normalizedExpectedEmail = String(expectedEmail || '').trim().toLowerCase();
+  const consentEmails = Array.isArray(snapshot?.consentEmails) ? snapshot.consentEmails : [];
+  if (normalizedExpectedEmail && consentEmails.length > 0 && !consentEmails.includes(normalizedExpectedEmail)) {
+    return false;
+  }
+
+  return true;
+}
+
 function createStep6SuccessResult(snapshot, options = {}) {
   return {
     step6Outcome: 'success',
@@ -1207,6 +1248,7 @@ function createStep6SuccessResult(snapshot, options = {}) {
     url: snapshot?.url || location.href,
     via: options.via || '',
     loginVerificationRequestedAt: options.loginVerificationRequestedAt || null,
+    directOAuthConsent: Boolean(options.directOAuthConsent),
   };
 }
 
@@ -1554,7 +1596,7 @@ async function fillVerificationCode(step, payload) {
 // Step 6: Login with registered account (on OAuth auth page)
 // ============================================================
 
-async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 12000) {
+async function waitForStep6EmailSubmitTransition(emailSubmittedAt, expectedEmail = '', timeout = 12000) {
   const start = Date.now();
   let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
 
@@ -1568,6 +1610,16 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
         result: createStep6SuccessResult(snapshot, {
           via: 'email_submit',
           loginVerificationRequestedAt: emailSubmittedAt,
+        }),
+      };
+    }
+
+    if (isStep6DirectOAuthConsent(snapshot, expectedEmail)) {
+      return {
+        action: 'done',
+        result: createStep6SuccessResult(snapshot, {
+          via: 'email_submit_direct_oauth_consent',
+          directOAuthConsent: true,
         }),
       };
     }
@@ -1587,10 +1639,6 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
       };
     }
 
-    if (snapshot.state === 'oauth_consent_page') {
-      throw new Error(`提交邮箱后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
-    }
-
     if (snapshot.state === 'add_phone_page') {
       throw new Error(`提交邮箱后页面直接进入手机号页面，未经过登录验证码页。URL: ${snapshot.url}`);
     }
@@ -1608,6 +1656,15 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
       }),
     };
   }
+  if (isStep6DirectOAuthConsent(snapshot, expectedEmail)) {
+    return {
+      action: 'done',
+      result: createStep6SuccessResult(snapshot, {
+        via: 'email_submit_direct_oauth_consent',
+        directOAuthConsent: true,
+      }),
+    };
+  }
   if (snapshot.state === 'password_page') {
     return { action: 'password', snapshot };
   }
@@ -1621,9 +1678,6 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
       ),
     };
   }
-  if (snapshot.state === 'oauth_consent_page') {
-    throw new Error(`提交邮箱后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
-  }
   if (snapshot.state === 'add_phone_page') {
     throw new Error(`提交邮箱后页面直接进入手机号页面，未经过登录验证码页。URL: ${snapshot.url}`);
   }
@@ -1636,7 +1690,7 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
   };
 }
 
-async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout = 10000) {
+async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, expectedEmail = '', timeout = 10000) {
   const start = Date.now();
   let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
 
@@ -1654,6 +1708,16 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
       };
     }
 
+    if (isStep6DirectOAuthConsent(snapshot, expectedEmail)) {
+      return {
+        action: 'done',
+        result: createStep6SuccessResult(snapshot, {
+          via: 'password_submit_direct_oauth_consent',
+          directOAuthConsent: true,
+        }),
+      };
+    }
+
     if (snapshot.state === 'login_timeout_error_page') {
       return {
         action: 'recoverable',
@@ -1663,10 +1727,6 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
           '提交密码后进入登录超时报错页。'
         ),
       };
-    }
-
-    if (snapshot.state === 'oauth_consent_page') {
-      throw new Error(`提交密码后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
     }
 
     if (snapshot.state === 'add_phone_page') {
@@ -1686,6 +1746,15 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
       }),
     };
   }
+  if (isStep6DirectOAuthConsent(snapshot, expectedEmail)) {
+    return {
+      action: 'done',
+      result: createStep6SuccessResult(snapshot, {
+        via: 'password_submit_direct_oauth_consent',
+        directOAuthConsent: true,
+      }),
+    };
+  }
   if (snapshot.state === 'login_timeout_error_page') {
     return {
       action: 'recoverable',
@@ -1695,9 +1764,6 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
         '提交密码后进入登录超时报错页。'
       ),
     };
-  }
-  if (snapshot.state === 'oauth_consent_page') {
-    throw new Error(`提交密码后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
   }
   if (snapshot.state === 'add_phone_page') {
     throw new Error(`提交密码后页面直接进入手机号页面，未经过登录验证码页。URL: ${snapshot.url}`);
@@ -1714,7 +1780,7 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
   };
 }
 
-async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeout = 10000) {
+async function waitForStep6SwitchTransition(loginVerificationRequestedAt, expectedEmail = '', timeout = 10000) {
   const start = Date.now();
   let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
 
@@ -1729,16 +1795,19 @@ async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeou
       });
     }
 
+    if (isStep6DirectOAuthConsent(snapshot, expectedEmail)) {
+      return createStep6SuccessResult(snapshot, {
+        via: 'switch_to_one_time_code_login_direct_oauth_consent',
+        directOAuthConsent: true,
+      });
+    }
+
     if (snapshot.state === 'login_timeout_error_page') {
       return await createStep6LoginTimeoutRecoverableResult(
         'login_timeout_error_page',
         snapshot,
         '切换到一次性验证码登录后进入登录超时报错页。'
       );
-    }
-
-    if (snapshot.state === 'oauth_consent_page') {
-      throw new Error(`切换到一次性验证码登录后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
     }
 
     if (snapshot.state === 'add_phone_page') {
@@ -1755,15 +1824,18 @@ async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeou
       loginVerificationRequestedAt,
     });
   }
+  if (isStep6DirectOAuthConsent(snapshot, expectedEmail)) {
+    return createStep6SuccessResult(snapshot, {
+      via: 'switch_to_one_time_code_login_direct_oauth_consent',
+      directOAuthConsent: true,
+    });
+  }
   if (snapshot.state === 'login_timeout_error_page') {
     return await createStep6LoginTimeoutRecoverableResult(
       'login_timeout_error_page',
       snapshot,
       '切换到一次性验证码登录后进入登录超时报错页。'
     );
-  }
-  if (snapshot.state === 'oauth_consent_page') {
-    throw new Error(`切换到一次性验证码登录后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
   }
   if (snapshot.state === 'add_phone_page') {
     throw new Error(`切换到一次性验证码登录后页面直接进入手机号页面，未经过登录验证码页。URL: ${snapshot.url}`);
@@ -1774,7 +1846,7 @@ async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeou
   });
 }
 
-async function step6SwitchToOneTimeCodeLogin(snapshot) {
+async function step6SwitchToOneTimeCodeLogin(snapshot, expectedEmail = '') {
   const switchTrigger = snapshot?.switchTrigger || findOneTimeCodeLoginTrigger();
   if (!switchTrigger || !isActionEnabled(switchTrigger)) {
     return createStep6RecoverableResult('missing_one_time_code_trigger', normalizeStep6Snapshot(inspectLoginAuthState()), {
@@ -1788,7 +1860,7 @@ async function step6SwitchToOneTimeCodeLogin(snapshot) {
   simulateClick(switchTrigger);
   log('步骤 7：已点击一次性验证码登录');
   await sleep(1200);
-  return waitForStep6SwitchTransition(loginVerificationRequestedAt);
+  return waitForStep6SwitchTransition(loginVerificationRequestedAt, expectedEmail);
 }
 
 async function step6LoginFromPasswordPage(payload, snapshot) {
@@ -1809,9 +1881,13 @@ async function step6LoginFromPasswordPage(payload, snapshot) {
     await triggerLoginSubmitAction(currentSnapshot.submitButton, currentSnapshot.passwordInput);
     log('步骤 7：已提交密码');
 
-    const transition = await waitForStep6PasswordSubmitTransition(passwordSubmittedAt);
+    const transition = await waitForStep6PasswordSubmitTransition(passwordSubmittedAt, payload.email);
     if (transition.action === 'done') {
-      log('步骤 7：已进入登录验证码页面。', 'ok');
+      if (transition.result?.directOAuthConsent) {
+        log('步骤 7：账号已登录，已直接进入 OAuth 授权页。', 'ok');
+      } else {
+        log('步骤 7：已进入登录验证码页面。', 'ok');
+      }
       return transition.result;
     }
     if (transition.action === 'recoverable') {
@@ -1819,7 +1895,7 @@ async function step6LoginFromPasswordPage(payload, snapshot) {
       return transition.result;
     }
     if (transition.action === 'switch') {
-      return step6SwitchToOneTimeCodeLogin(transition.snapshot);
+      return step6SwitchToOneTimeCodeLogin(transition.snapshot, payload.email);
     }
 
     return createStep6RecoverableResult('password_submit_unknown', normalizeStep6Snapshot(inspectLoginAuthState()), {
@@ -1828,7 +1904,7 @@ async function step6LoginFromPasswordPage(payload, snapshot) {
   }
 
   if (currentSnapshot.switchTrigger) {
-    return step6SwitchToOneTimeCodeLogin(currentSnapshot);
+    return step6SwitchToOneTimeCodeLogin(currentSnapshot, payload.email);
   }
 
   return createStep6RecoverableResult('password_page_unactionable', currentSnapshot, {
@@ -1856,9 +1932,13 @@ async function step6LoginFromEmailPage(payload, snapshot) {
   await triggerLoginSubmitAction(currentSnapshot.submitButton, emailInput);
   log('步骤 7：已提交邮箱');
 
-  const transition = await waitForStep6EmailSubmitTransition(emailSubmittedAt);
+  const transition = await waitForStep6EmailSubmitTransition(emailSubmittedAt, payload.email);
   if (transition.action === 'done') {
-    log('步骤 7：已进入登录验证码页面。', 'ok');
+    if (transition.result?.directOAuthConsent) {
+      log('步骤 7：账号已登录，已直接进入 OAuth 授权页。', 'ok');
+    } else {
+      log('步骤 7：已进入登录验证码页面。', 'ok');
+    }
     return transition.result;
   }
   if (transition.action === 'recoverable') {
@@ -1885,6 +1965,14 @@ async function step6_login(payload) {
   if (snapshot.state === 'verification_page') {
     log('步骤 7：登录验证码页面已就绪。', 'ok');
     return createStep6SuccessResult(snapshot, { via: 'already_on_verification_page' });
+  }
+
+  if (isStep6DirectOAuthConsent(snapshot, email)) {
+    log('步骤 7：OAuth 授权页已就绪，无需登录验证码。', 'ok');
+    return createStep6SuccessResult(snapshot, {
+      via: 'already_on_oauth_consent',
+      directOAuthConsent: true,
+    });
   }
 
   if (snapshot.state === 'login_timeout_error_page') {
@@ -2341,4 +2429,3 @@ async function step5_fillNameBirthday(payload) {
   log('步骤 5：已点击“完成帐户创建”，当前步骤直接完成，不再等待页面结果。');
   return completionPayload;
 }
-

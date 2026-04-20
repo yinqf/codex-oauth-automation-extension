@@ -22,6 +22,7 @@
         'qq-mail': 'QQ 邮箱',
         'mail-163': '163 邮箱',
         'mail-2925': '2925 邮箱',
+        'ms-lqqq-mail': 'ms.lqqq 邮箱',
         'inbucket-mail': 'Inbucket 邮箱',
         'duck-mail': 'Duck 邮箱',
         'hotmail-api': 'Hotmail（API对接/本地助手）',

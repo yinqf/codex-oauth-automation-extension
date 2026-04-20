@@ -84,6 +84,7 @@
           if (isStep6SuccessResult(result)) {
             await completeStepFromBackground(7, {
               loginVerificationRequestedAt: result.loginVerificationRequestedAt || null,
+              directOAuthConsent: Boolean(result.directOAuthConsent),
             });
             return;
           }

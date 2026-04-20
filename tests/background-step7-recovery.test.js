@@ -145,3 +145,75 @@ test('step 8 disables resend interval for 2925 mailbox polling', async () => {
   assert.equal(capturedOptions.beforeSubmit, undefined);
   assert.equal(typeof capturedOptions.getRemainingTimeMs, 'function');
 });
+
+test('step 8 skips mailbox verification when OAuth consent is already ready', async () => {
+  const events = {
+    stateUpdates: [],
+    statuses: [],
+    logs: [],
+    resolveCalls: 0,
+  };
+
+  const executor = api.createStep8Executor({
+    addLog: async (message, level) => {
+      events.logs.push({ message, level });
+    },
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    confirmCustomVerificationStepBypass: async () => {},
+    ensureStep8VerificationPageReady: async () => ({ state: 'verification_page' }),
+    executeStep7: async () => {},
+    getOAuthFlowRemainingMs: async () => 5000,
+    getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => Math.min(defaultTimeoutMs, 5000),
+    getMailConfig: () => ({
+      provider: 'qq',
+      label: 'QQ 邮箱',
+      source: 'mail-qq',
+      url: 'https://mail.qq.com',
+      navigateOnReuse: false,
+    }),
+    getPanelMode: () => 'cpa',
+    getState: async () => ({ email: 'user@example.com', password: 'secret' }),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isTabAlive: async () => true,
+    isVerificationMailPollingError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    resolveVerificationStep: async () => {
+      events.resolveCalls += 1;
+    },
+    reuseOrCreateTab: async () => {},
+    setState: async (patch) => {
+      events.stateUpdates.push(patch);
+    },
+    setStepStatus: async (step, status) => {
+      events.statuses.push({ step, status });
+    },
+    shouldSkipLoginVerificationForCpaCallback: () => false,
+    shouldUseCustomRegistrationEmail: () => false,
+    sleepWithStop: async () => {},
+    STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
+    STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
+    throwIfStopped: () => {},
+  });
+
+  await executor.executeStep8({
+    email: 'user@example.com',
+    password: 'secret',
+    oauthConsentReady: true,
+  });
+
+  assert.deepStrictEqual(events.stateUpdates, [
+    {
+      lastLoginCode: null,
+      loginVerificationRequestedAt: null,
+    },
+  ]);
+  assert.deepStrictEqual(events.statuses, [{ step: 8, status: 'skipped' }]);
+  assert.equal(events.resolveCalls, 0);
+  assert.match(events.logs[0].message, /已直接进入 OAuth 授权页/);
+});

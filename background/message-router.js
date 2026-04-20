@@ -74,6 +74,7 @@
       setStepStatus,
       skipAutoRunCountdown,
       skipStep,
+      startCpaUploadFlow,
       startAutoRunLoop,
       syncHotmailAccounts,
       testHotmailAccountMailAccess,
@@ -87,7 +88,7 @@
       }
 
       const state = stateOverride || await getState();
-      if (isAutoRunLockedState(state)) {
+      if (isAutoRunLockedState(state) || state.cpaUploadRunning) {
         return null;
       }
 
@@ -134,8 +135,16 @@
           }
           break;
         case 7:
-          if (payload.loginVerificationRequestedAt) {
-            await setState({ loginVerificationRequestedAt: payload.loginVerificationRequestedAt });
+          if (payload.directOAuthConsent) {
+            await setState({
+              oauthConsentReady: true,
+              loginVerificationRequestedAt: null,
+            });
+          } else if (payload.loginVerificationRequestedAt) {
+            await setState({
+              oauthConsentReady: false,
+              loginVerificationRequestedAt: payload.loginVerificationRequestedAt,
+            });
           }
           break;
         case 4:
@@ -164,6 +173,9 @@
             await closeLocalhostCallbackTabs(payload.localhostUrl);
           }
           const latestState = await getState();
+          if (latestState.cpaUploadRunning) {
+            break;
+          }
           if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
             await patchHotmailAccount(latestState.currentHotmailAccountId, {
               used: true,
@@ -237,7 +249,7 @@
           await setStepStatus(message.step, 'completed');
           await addLog(`步骤 ${message.step} 已完成`, 'ok');
           await handleStepData(message.step, message.payload);
-          if (message.step === 10 && typeof appendAccountRunRecord === 'function') {
+          if (message.step === 10 && typeof appendAccountRunRecord === 'function' && !completionState?.cpaUploadRunning) {
             await appendAccountRunRecord('success', completionState);
           }
           notifyStepComplete(message.step, message.payload);
@@ -305,6 +317,15 @@
             await executeStep(step);
           }
           return { ok: true };
+        }
+
+        case 'CPA_UPLOAD_OAUTH': {
+          clearStopRequest();
+          await ensureManualInteractionAllowed('CPA 独立上传');
+          if (typeof startCpaUploadFlow !== 'function') {
+            throw new Error('CPA 独立上传流程未初始化。');
+          }
+          return await startCpaUploadFlow(message.payload || {});
         }
 
         case 'AUTO_RUN': {

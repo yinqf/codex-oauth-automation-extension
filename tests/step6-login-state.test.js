@@ -86,6 +86,15 @@ function getLoginSubmitButton() {
   return ${JSON.stringify(overrides.submitButton || null)};
 }
 
+function getPageTextSnapshot() {
+  return ${JSON.stringify(overrides.pageText || '')};
+}
+
+function getEmailsFromText(text) {
+  const matches = String(text || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) || [];
+  return Array.from(new Set(matches.map((email) => email.trim().toLowerCase()).filter(Boolean)));
+}
+
 function isVerificationPageStillVisible() {
   return ${JSON.stringify(Boolean(overrides.verificationVisible))};
 }

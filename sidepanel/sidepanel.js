@@ -36,6 +36,11 @@ const displayStatus = document.getElementById('display-status');
 const statusBar = document.getElementById('status-bar');
 const inputEmail = document.getElementById('input-email');
 const inputPassword = document.getElementById('input-password');
+const rowCpaUpload = document.getElementById('row-cpa-upload');
+const rowCpaUploadActions = document.getElementById('row-cpa-upload-actions');
+const inputCpaUploadAccounts = document.getElementById('input-cpa-upload-accounts');
+const btnCpaUpload = document.getElementById('btn-cpa-upload');
+const cpaUploadSummary = document.getElementById('cpa-upload-summary');
 const btnToggleVpsUrl = document.getElementById('btn-toggle-vps-url');
 const btnToggleVpsPassword = document.getElementById('btn-toggle-vps-password');
 const btnFetchEmail = document.getElementById('btn-fetch-email');
@@ -1324,6 +1329,7 @@ function collectSettingsPayload() {
     hotmailServiceMode: getSelectedHotmailServiceMode(),
     hotmailRemoteBaseUrl: inputHotmailRemoteBaseUrl.value.trim(),
     hotmailLocalBaseUrl: inputHotmailLocalBaseUrl.value.trim(),
+    cpaUploadAccountsText: inputCpaUploadAccounts?.value || '',
     luckmailApiKey: inputLuckmailApiKey.value,
     luckmailBaseUrl: normalizeLuckmailBaseUrl(inputLuckmailBaseUrl.value),
     luckmailEmailType: normalizeLuckmailEmailType(selectLuckmailEmailType.value),
@@ -1699,6 +1705,9 @@ function applySettingsState(state) {
   syncPasswordField(state || {});
   inputVpsUrl.value = state?.vpsUrl || '';
   inputVpsPassword.value = state?.vpsPassword || '';
+  if (inputCpaUploadAccounts) {
+    inputCpaUploadAccounts.value = state?.cpaUploadAccountsText || '';
+  }
   setLocalCpaStep9Mode(state?.localCpaStep9Mode);
   setCpaCallbackMode(state?.cpaCallbackMode);
   selectPanelMode.value = state?.panelMode || 'cpa';
@@ -2497,6 +2506,8 @@ function updatePanelModeUI() {
   rowVpsPassword.style.display = useSub2Api ? 'none' : '';
   rowLocalCpaStep9Mode.style.display = useSub2Api ? 'none' : '';
   rowCpaCallbackMode.style.display = useSub2Api ? 'none' : '';
+  if (rowCpaUpload) rowCpaUpload.style.display = useSub2Api ? 'none' : '';
+  if (rowCpaUploadActions) rowCpaUploadActions.style.display = useSub2Api ? 'none' : '';
   rowSub2ApiUrl.style.display = useSub2Api ? '' : 'none';
   rowSub2ApiEmail.style.display = useSub2Api ? '' : 'none';
   rowSub2ApiPassword.style.display = useSub2Api ? '' : 'none';
@@ -2588,6 +2599,9 @@ function updateButtonStates() {
   });
 
   btnReset.disabled = anyRunning || autoScheduled || isAutoRunPausedPhase() || autoLocked;
+  if (btnCpaUpload) {
+    btnCpaUpload.disabled = anyRunning || autoScheduled || autoLocked || selectPanelMode.value !== 'cpa';
+  }
   const disableIcloudControls = anyRunning || autoScheduled || autoLocked;
   if (btnIcloudRefresh) btnIcloudRefresh.disabled = disableIcloudControls;
   if (btnIcloudDeleteUsed) btnIcloudDeleteUsed.disabled = disableIcloudControls || !hasDeletableUsedIcloudAliases();
@@ -3205,6 +3219,60 @@ btnFetchEmail.addEventListener('click', async () => {
 btnTogglePassword.addEventListener('click', () => {
   inputPassword.type = inputPassword.type === 'password' ? 'text' : 'password';
   syncPasswordToggleLabel();
+});
+
+inputCpaUploadAccounts?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+
+btnCpaUpload?.addEventListener('click', async () => {
+  try {
+    if (!(await maybeTakeoverAutoRun('CPA 独立上传'))) {
+      return;
+    }
+    if (selectPanelMode.value !== 'cpa') {
+      showToast('CPA 独立上传只支持 CPA 面板模式。', 'warn');
+      return;
+    }
+
+    const accountsText = inputCpaUploadAccounts?.value || '';
+    if (!inputVpsUrl.value.trim()) {
+      showToast('请先填写 CPA 地址。', 'warn');
+      return;
+    }
+    if (!inputVpsPassword.value) {
+      showToast('请先填写 CPA 管理密钥。', 'warn');
+      return;
+    }
+    if (!accountsText.trim()) {
+      showToast('请先填写 CPA 上传账号，每行格式：Codex邮箱----Codex密码----邮箱密码，可带第4段refreshToken（忽略）。', 'warn');
+      return;
+    }
+
+    btnCpaUpload.disabled = true;
+    btnCpaUpload.textContent = '批量上传中...';
+    if (cpaUploadSummary) cpaUploadSummary.textContent = '处理中...';
+    await saveSettings({ silent: true });
+
+    const response = await chrome.runtime.sendMessage({
+      type: 'CPA_UPLOAD_OAUTH',
+      source: 'sidepanel',
+      payload: { accountsText },
+    });
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+    const summaryText = `成功 ${response.success?.length || 0} / ${response.total || 0}，失败 ${response.failed?.length || 0}`;
+    if (cpaUploadSummary) cpaUploadSummary.textContent = summaryText;
+    showToast(`CPA OAuth 批量处理完成：${summaryText}`, response.failed?.length ? 'warn' : 'success', 3000);
+  } catch (err) {
+    showToast(err.message, 'error');
+    if (cpaUploadSummary) cpaUploadSummary.textContent = err.message;
+  } finally {
+    btnCpaUpload.textContent = '批量获取并回填 OAuth';
+    updateButtonStates();
+  }
 });
 
 btnToggleVpsUrl.addEventListener('click', () => {

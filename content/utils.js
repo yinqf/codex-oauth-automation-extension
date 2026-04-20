@@ -11,6 +11,7 @@ const SCRIPT_SOURCE = (() => {
   if (hostname === 'mail.163.com' || hostname.endsWith('.mail.163.com') || hostname === 'webmail.vip.163.com') return 'mail-163';
   if (hostname === 'mail.google.com') return 'gmail-mail';
   if (hostname === 'www.icloud.com' || hostname === 'www.icloud.com.cn') return 'icloud-mail';
+  if (hostname === 'ms.lqqq.cc') return 'ms-lqqq-mail';
   if (url.includes('duckduckgo.com/email/settings/autofill')) return 'duck-mail';
   if (url.includes('chatgpt.com')) return 'chatgpt';
   if (url.includes("2925.com")) return "mail-2925";

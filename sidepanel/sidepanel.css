@@ -700,6 +700,11 @@ header {
   justify-content: center;
 }
 
+.data-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .hotmail-card {
   margin-top: 10px;
 }

@@ -129,3 +129,47 @@ test('step 7 starts a new oauth timeout window for each refreshed oauth url', as
     },
   ]);
 });
+
+test('step 7 forwards direct OAuth consent success to background completion', async () => {
+  const source = fs.readFileSync('background/steps/oauth-login.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundStep7;`)(globalScope);
+
+  const events = {
+    completed: [],
+  };
+
+  const executor = api.createStep7Executor({
+    addLog: async () => {},
+    completeStepFromBackground: async (step, payload) => {
+      events.completed.push({ step, payload });
+    },
+    getErrorMessage: (error) => error?.message || String(error || ''),
+    getLoginAuthStateLabel: (state) => state || 'unknown',
+    getState: async () => ({ email: 'user@example.com', password: 'secret' }),
+    isStep6RecoverableResult: (result) => result?.step6Outcome === 'recoverable',
+    isStep6SuccessResult: (result) => result?.step6Outcome === 'success',
+    refreshOAuthUrlBeforeStep6: async () => 'https://oauth.example/latest',
+    reuseOrCreateTab: async () => {},
+    sendToContentScriptResilient: async () => ({
+      step6Outcome: 'success',
+      directOAuthConsent: true,
+    }),
+    shouldSkipLoginVerificationForCpaCallback: () => false,
+    skipLoginVerificationStepsForCpaCallback: async () => {},
+    STEP6_MAX_ATTEMPTS: 3,
+    throwIfStopped: () => {},
+  });
+
+  await executor.executeStep7({ email: 'user@example.com', password: 'secret' });
+
+  assert.deepStrictEqual(events.completed, [
+    {
+      step: 7,
+      payload: {
+        loginVerificationRequestedAt: null,
+        directOAuthConsent: true,
+      },
+    },
+  ]);
+});

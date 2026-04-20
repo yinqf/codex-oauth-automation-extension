@@ -94,6 +94,16 @@
     },
     {
       "matches": [
+        "https://ms.lqqq.cc/*"
+      ],
+      "js": [
+        "content/utils.js",
+        "content/ms-lqqq-mail.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://duckduckgo.com/email/settings/autofill*"
       ],
       "js": [
