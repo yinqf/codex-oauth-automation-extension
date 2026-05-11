@@ -132,6 +132,8 @@ const HOTMAIL_PROVIDER = 'hotmail-api';
 const LUCKMAIL_PROVIDER = 'luckmail-api';
 const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
 const MS_LQQQ_PROVIDER = 'ms-lqqq';
+const MONSTERX_MAIL_PROVIDER = 'monsterx-mail';
+const MONSTERX_MAIL_BASE_URL = 'https://mail.cpacc.us.ci';
 const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
@@ -272,6 +274,9 @@ const PERSISTED_SETTING_DEFAULTS = {
   cloudflareTempEmailReceiveMailbox: '',
   cloudflareTempEmailDomain: '',
   cloudflareTempEmailDomains: [],
+  monsterxMailBaseUrl: '',
+  monsterxMailToken: '',
+  monsterxMailRefreshToken: '',
   hotmailAccounts: [],
 };
 
@@ -657,6 +662,7 @@ function normalizeMailProvider(value = '') {
     case HOTMAIL_PROVIDER:
     case LUCKMAIL_PROVIDER:
     case CLOUDFLARE_TEMP_EMAIL_PROVIDER:
+    case MONSTERX_MAIL_PROVIDER:
     case '163':
     case '163-vip':
     case 'qq':
@@ -3134,6 +3140,28 @@ async function pollCloudflareTempEmailVerificationCode(step, state, pollPayload 
   }
 
   throw lastError || new Error(`步骤 ${step}：未在 Cloudflare Temp Email 中找到新的匹配验证码。`);
+}
+
+function normalizeMonsterxMailBaseUrl(value = '') {
+  const raw = String(value || '').trim() || MONSTERX_MAIL_BASE_URL;
+  const candidate = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(raw) ? raw : `https://${raw}`;
+  try {
+    const parsed = new URL(candidate);
+    parsed.pathname = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return MONSTERX_MAIL_BASE_URL;
+  }
+}
+
+function normalizeMonsterxMailToken(value = '') {
+  return String(value || '').trim();
+}
+
+function isMonsterxMailToken(value = '') {
+  return /^(tok|lmp)_/i.test(normalizeMonsterxMailToken(value));
 }
 
 async function getOpenIcloudHostPreference() {
@@ -6427,6 +6455,19 @@ function getMailConfig(state) {
   }
   if (provider === CLOUDFLARE_TEMP_EMAIL_PROVIDER) {
     return { provider: CLOUDFLARE_TEMP_EMAIL_PROVIDER, label: 'Cloudflare Temp Email' };
+  }
+  if (provider === MONSTERX_MAIL_PROVIDER) {
+    if (!isMonsterxMailToken(state.monsterxMailToken)) {
+      return { error: 'monsterx 邮箱 token 缺失或格式无效，请检查 CPA 上传账号第 4 段。' };
+    }
+    return {
+      source: MONSTERX_MAIL_PROVIDER,
+      url: normalizeMonsterxMailBaseUrl(state.monsterxMailBaseUrl),
+      label: 'monsterx 邮箱 token',
+      navigateOnReuse: true,
+      inject: ['content/utils.js', 'content/monsterx-mail.js'],
+      injectSource: MONSTERX_MAIL_PROVIDER,
+    };
   }
   if (provider === MS_LQQQ_PROVIDER) {
     const email = String(state.email || '').trim();

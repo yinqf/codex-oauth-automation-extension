@@ -112,6 +112,58 @@ test('cpa upload flow accepts and ignores fourth refresh token field', () => {
   assert.equal(account.mailUrl, 'https://ms.lqqq.cc/web/user@example.com----mail-pass');
 });
 
+test('cpa upload flow parses monsterx token account format', () => {
+  const api = loadModule();
+  const flow = api.createCpaUploadFlow();
+  const [account] = flow.parseCpaUploadAccountsText(
+    'user@example.com----codex-pass----rt_refresh_value----tok_mail_value'
+  );
+
+  assert.equal(account.email, 'user@example.com');
+  assert.equal(account.password, 'codex-pass');
+  assert.equal(account.refreshToken, 'rt_refresh_value');
+  assert.equal(account.mailToken, 'tok_mail_value');
+  assert.equal(account.mailBaseUrl, 'https://mail.cpacc.us.ci');
+  assert.equal(account.mailProvider, 'monsterx-mail');
+  assert.equal(account.mailPassword, undefined);
+  assert.equal(account.mailUrl, undefined);
+});
+
+test('cpa upload flow uses monsterx provider state for token account format', async () => {
+  const api = loadModule();
+  let state = {
+    panelMode: 'cpa',
+    vpsUrl: 'http://127.0.0.1:8317/management.html#/oauth',
+    vpsPassword: 'key',
+    cpaUploadAccountsText: 'user@example.com----codex-pass----rt_refresh_value----lmp_mail_value',
+  };
+
+  const flow = api.createCpaUploadFlow({
+    addLog: async () => {},
+    executeStepAndWait: async () => {},
+    getPanelMode: (nextState) => nextState.panelMode,
+    getState: async () => state,
+    setEmailState: async (email) => {
+      state = { ...state, email };
+    },
+    setState: async (updates) => {
+      state = { ...state, ...updates };
+    },
+    setStepStatus: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const result = await flow.runCpaUpload();
+
+  assert.equal(result.ok, true);
+  assert.equal(state.mailProvider, 'monsterx-mail');
+  assert.equal(state.monsterxMailBaseUrl, 'https://mail.cpacc.us.ci');
+  assert.equal(state.monsterxMailToken, 'lmp_mail_value');
+  assert.equal(state.monsterxMailRefreshToken, 'rt_refresh_value');
+  assert.equal(state.msLqqqMailPassword, '');
+  assert.equal(state.msLqqqMailUrl, '');
+});
+
 test('cpa upload flow continues after a failed line', async () => {
   const api = loadModule();
   const calls = [];

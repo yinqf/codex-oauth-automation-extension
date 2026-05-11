@@ -17,6 +17,8 @@
     const ACCOUNT_LINE_SEPARATOR = '----';
     const MS_LQQQ_PROVIDER = 'ms-lqqq';
     const MS_LQQQ_BASE_URL = 'https://ms.lqqq.cc/web';
+    const MONSTERX_MAIL_PROVIDER = 'monsterx-mail';
+    const MONSTERX_MAIL_BASE_URL = 'https://mail.cpacc.us.ci';
 
     function normalizeCredential(value) {
       return String(value || '').trim();
@@ -24,6 +26,10 @@
 
     function buildMsLqqqMailUrl(email, mailPassword) {
       return `${MS_LQQQ_BASE_URL}/${email}${ACCOUNT_LINE_SEPARATOR}${mailPassword}`;
+    }
+
+    function isMonsterxMailToken(value) {
+      return /^(tok|lmp)_/i.test(normalizeCredential(value));
     }
 
     function parseCpaUploadAccountLine(line, index = 0) {
@@ -34,12 +40,25 @@
 
       const parts = rawLine.split(ACCOUNT_LINE_SEPARATOR).map((part) => part.trim());
       if ((parts.length !== 3 && parts.length !== 4) || parts.slice(0, 3).some((part) => !part)) {
-        throw new Error(`第 ${index + 1} 行格式错误，应为：Codex邮箱----Codex密码----邮箱密码，可带第 4 段 refreshToken（会忽略）`);
+        throw new Error(`第 ${index + 1} 行格式错误，应为：Codex邮箱----Codex密码----邮箱密码，或 Codex邮箱----Codex密码----refreshToken----邮箱取件token`);
       }
 
-      const [email, password, mailPassword] = parts;
+      const [email, password, mailPasswordOrRefreshToken, mailToken] = parts;
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         throw new Error(`第 ${index + 1} 行邮箱格式无效：${email}`);
+      }
+
+      if (parts.length === 4 && isMonsterxMailToken(mailToken)) {
+        return {
+          lineNumber: index + 1,
+          rawLine,
+          email,
+          password,
+          refreshToken: mailPasswordOrRefreshToken,
+          mailProvider: MONSTERX_MAIL_PROVIDER,
+          mailToken,
+          mailBaseUrl: MONSTERX_MAIL_BASE_URL,
+        };
       }
 
       return {
@@ -47,8 +66,9 @@
         rawLine,
         email,
         password,
-        mailPassword,
-        mailUrl: buildMsLqqqMailUrl(email, mailPassword),
+        mailProvider: MS_LQQQ_PROVIDER,
+        mailPassword: mailPasswordOrRefreshToken,
+        mailUrl: buildMsLqqqMailUrl(email, mailPasswordOrRefreshToken),
       };
     }
 
@@ -76,9 +96,12 @@
         oauthConsentReady: false,
         oauthFlowDeadlineAt: null,
         password: account.password,
-        mailProvider: MS_LQQQ_PROVIDER,
-        msLqqqMailPassword: account.mailPassword,
-        msLqqqMailUrl: account.mailUrl,
+        mailProvider: account.mailProvider || MS_LQQQ_PROVIDER,
+        msLqqqMailPassword: account.mailProvider === MONSTERX_MAIL_PROVIDER ? '' : account.mailPassword,
+        msLqqqMailUrl: account.mailProvider === MONSTERX_MAIL_PROVIDER ? '' : account.mailUrl,
+        monsterxMailBaseUrl: account.mailProvider === MONSTERX_MAIL_PROVIDER ? account.mailBaseUrl : '',
+        monsterxMailToken: account.mailProvider === MONSTERX_MAIL_PROVIDER ? account.mailToken : '',
+        monsterxMailRefreshToken: account.mailProvider === MONSTERX_MAIL_PROVIDER ? account.refreshToken : '',
       });
       await setEmailState(account.email);
       for (const [step, status] of Object.entries(stepStatusUpdates)) {
@@ -165,6 +188,7 @@
 
     return {
       buildMsLqqqMailUrl,
+      isMonsterxMailToken,
       parseCpaUploadAccountLine,
       parseCpaUploadAccountsText,
       runCpaUpload: runCpaUploadBatch,

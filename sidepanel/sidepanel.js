@@ -3385,7 +3385,7 @@ btnCpaUpload?.addEventListener('click', async () => {
       return;
     }
     if (!accountsText.trim()) {
-      showToast('请先填写 CPA 上传账号，每行格式：Codex邮箱----Codex密码----邮箱密码，可带第4段refreshToken（忽略）。', 'warn');
+      showToast('请先填写 CPA 上传账号，每行格式：Codex邮箱----Codex密码----邮箱密码，或 Codex邮箱----Codex密码----refreshToken----邮箱取件token。', 'warn');
       return;
     }
 
